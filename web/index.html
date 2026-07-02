@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Remote SIM Gateway Demo</title>
+<style>
+  :root {
+    --bg: #f5f7fb;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --primary: #2563eb;
+    --danger: #dc2626;
+    --success: #16a34a;
+    --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    --radius: 18px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .app {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 28px 18px 42px;
+  }
+
+  .login-wrap {
+    min-height: calc(100vh - 56px);
+    display: grid;
+    place-items: center;
+  }
+
+  .login-card {
+    width: min(440px, 100%);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 30px;
+    box-shadow: var(--shadow);
+  }
+
+  .login-title {
+    text-align: center;
+    font-size: 25px;
+    font-weight: 800;
+    margin-bottom: 8px;
+  }
+
+  .login-subtitle {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 26px;
+  }
+
+  .login-form {
+    display: grid;
+    gap: 14px;
+  }
+
+  .code-row {
+    display: grid;
+    grid-template-columns: 1fr 120px;
+    gap: 10px;
+  }
+
+  .login-footer {
+    border-top: 1px solid var(--border);
+    margin-top: 22px;
+    padding-top: 16px;
+    display: grid;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .topbar {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 22px;
+  }
+
+  .title {
+    font-size: 22px;
+    font-weight: 750;
+    letter-spacing: 0.2px;
+  }
+
+  .subtitle {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .status-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .pill {
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 11px;
+    background: #fff;
+    white-space: nowrap;
+  }
+
+  .logout {
+    border: 1px solid #fecaca;
+    color: var(--danger);
+    background: #fff7f7;
+    border-radius: 999px;
+    padding: 8px 11px;
+    font-weight: 750;
+    cursor: pointer;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--success);
+    margin-right: 6px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .module-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px;
+    min-height: 170px;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    transition: transform 0.16s ease, border-color 0.16s ease;
+    position: relative;
+  }
+
+  .module-card:hover {
+    transform: translateY(-2px);
+    border-color: #bfdbfe;
+  }
+
+  .module-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 15px;
+    background: #eff6ff;
+    color: var(--primary);
+    display: grid;
+    place-items: center;
+    font-size: 23px;
+    margin-bottom: 20px;
+  }
+
+  .module-title {
+    font-size: 24px;
+    font-weight: 760;
+  }
+
+  .module-desc {
+    color: var(--muted);
+    margin-top: 8px;
+    font-size: 14px;
+  }
+
+  .badge {
+    position: absolute;
+    top: 22px;
+    right: 22px;
+    min-width: 36px;
+    height: 28px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    padding: 0 9px;
+    font-size: 13px;
+    font-weight: 760;
+    color: #fff;
+    background: var(--danger);
+  }
+
+  .badge.sms { background: var(--primary); }
+
+  .panel, #mainApp {
+    display: none;
+  }
+
+  .panel.active, #mainApp.active { display: block; }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .back {
+    border: 0;
+    background: #eef2ff;
+    color: #1d4ed8;
+    border-radius: 999px;
+    padding: 9px 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .panel-title {
+    font-size: 20px;
+    font-weight: 760;
+  }
+
+  .panel-body {
+    padding: 18px 20px 22px;
+  }
+
+  .list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .item {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 15px;
+    background: #fff;
+  }
+
+  .item-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 7px;
+    font-size: 14px;
+  }
+
+  .name { font-weight: 740; }
+  .time { color: var(--muted); white-space: nowrap; }
+  .content { color: #374151; line-height: 1.55; }
+
+  label {
+    display: grid;
+    gap: 7px;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  input, textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    padding: 13px 14px;
+    font-size: 16px;
+    outline: none;
+    background: #fff;
+  }
+
+  textarea { min-height: 150px; resize: vertical; }
+
+  .form {
+    display: grid;
+    gap: 14px;
+    max-width: 560px;
+  }
+
+  .primary-btn, .danger-btn, .plain-btn {
+    border: 0;
+    border-radius: 13px;
+    padding: 13px 16px;
+    font-size: 16px;
+    font-weight: 760;
+    cursor: pointer;
+  }
+
+  .primary-btn { background: var(--primary); color: #fff; }
+  .danger-btn { background: var(--danger); color: #fff; }
+  .plain-btn { background: #eef2ff; color: #1d4ed8; }
+
+  .primary-btn:disabled, .plain-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .call-box {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px;
+    max-width: 560px;
+    background: #fff;
+  }
+
+  .incoming {
+    display: none;
+    border: 1px solid #fecaca;
+    background: #fff7f7;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 18px;
+  }
+
+  .incoming.show { display: block; }
+
+  .call-number {
+    font-size: 28px;
+    font-weight: 800;
+    margin: 10px 0 18px;
+  }
+
+  .actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .log-type {
+    font-weight: 780;
+    margin-right: 8px;
+  }
+
+  .muted { color: var(--muted); }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    background: #111827;
+    color: #fff;
+    border-radius: 999px;
+    padding: 11px 16px;
+    font-size: 14px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+    z-index: 20;
+  }
+
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 720px) {
+    .topbar { align-items: flex-start; flex-direction: column; }
+    .status-row { justify-content: flex-start; }
+    .grid { grid-template-columns: 1fr; }
+    .module-card { min-height: 140px; }
+    .code-row { grid-template-columns: 1fr; }
+  }
+
+  /* Mobile portrait optimization */
+  @media (max-width: 520px) and (orientation: portrait) {
+    body {
+      background: #f6f8fc;
+    }
+
+    .app {
+      padding: 14px 12px 28px;
+      max-width: 100%;
+    }
+
+    .login-wrap {
+      min-height: calc(100vh - 28px);
+    }
+
+    .login-card {
+      border-radius: 22px;
+      padding: 24px 18px;
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+    }
+
+    .login-title {
+      font-size: 23px;
+    }
+
+    .login-subtitle {
+      font-size: 13px;
+      margin-bottom: 22px;
+    }
+
+    .topbar {
+      padding: 15px;
+      border-radius: 18px;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .title {
+      font-size: 20px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .status-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .pill,
+    .logout {
+      width: 100%;
+      text-align: center;
+      justify-content: center;
+      font-size: 12px;
+      padding: 8px 8px;
+    }
+
+    .logout {
+      grid-column: span 2;
+    }
+
+    .grid {
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .module-card {
+      min-height: 116px;
+      padding: 18px;
+      border-radius: 18px;
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      column-gap: 14px;
+      align-items: center;
+    }
+
+    .module-icon {
+      width: 46px;
+      height: 46px;
+      margin-bottom: 0;
+      border-radius: 15px;
+    }
+
+    .module-title {
+      font-size: 21px;
+    }
+
+    .module-desc {
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 5px;
+    }
+
+    .badge {
+      top: 14px;
+      right: 14px;
+      height: 26px;
+      min-width: 32px;
+      font-size: 12px;
+    }
+
+    .panel {
+      border-radius: 18px;
+    }
+
+    .panel-header {
+      padding: 14px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .back {
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    .panel-title {
+      font-size: 18px;
+      order: 2;
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    .panel-header .muted {
+      font-size: 12px;
+      order: 3;
+      width: 100%;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .item {
+      padding: 13px;
+      border-radius: 14px;
+    }
+
+    .item-top {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3px;
+      font-size: 13px;
+    }
+
+    .time {
+      white-space: normal;
+      font-size: 12px;
+    }
+
+    .content {
+      font-size: 14px;
+      word-break: break-word;
+    }
+
+    input,
+    textarea {
+      font-size: 16px;
+      padding: 13px;
+      border-radius: 13px;
+    }
+
+    textarea {
+      min-height: 132px;
+    }
+
+    .primary-btn,
+    .danger-btn,
+    .plain-btn {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 14px;
+    }
+
+    .actions {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .call-box {
+      padding: 16px;
+      border-radius: 16px;
+    }
+
+    .incoming {
+      padding: 16px;
+      border-radius: 16px;
+    }
+
+    .call-number {
+      font-size: 24px;
+      word-break: break-word;
+    }
+
+    .toast {
+      width: calc(100% - 32px);
+      text-align: center;
+      border-radius: 16px;
+      bottom: 16px;
+    }
+  }
+
+</style>
+</head>
+<body>
+  <main class="app">
+    <section id="loginPage" class="login-wrap">
+      <div class="login-card">
+        <div class="login-title">Remote SIM Gateway</div>
+        <div class="login-subtitle">使用邮箱验证码访问您的远程 SIM 控制台</div>
+
+        <div class="login-form">
+          <label>邮箱
+            <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+          </label>
+
+          <div class="code-row">
+            <label>验证码
+              <input id="emailCode" inputmode="numeric" placeholder="6位验证码" />
+            </label>
+            <button id="sendCodeBtn" class="plain-btn" onclick="sendCode()">发送验证码</button>
+          </div>
+
+          <button class="primary-btn" onclick="login()">登录</button>
+        </div>
+
+        <div class="login-footer">
+          <div>Device：Not Connected</div>
+          <div>Server：Online</div>
+          <div>Version：V1.0 Demo</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mainApp">
+      <section class="topbar">
+        <div>
+          <div class="title">Remote SIM Gateway</div>
+          <div class="subtitle">极简网页控制台 · SIM 插在 Android 手机上</div>
+        </div>
+        <div class="status-row">
+          <div class="pill"><span class="dot"></span>Device Online</div>
+          <div class="pill">SIM Ready</div>
+          <div class="pill">Auth <span id="authTimer">04:59</span></div>
+          <div class="pill">Single Session</div>
+          <button class="logout" onclick="logout()">退出</button>
+        </div>
+      </section>
+
+      <section id="home" class="grid">
+        <div class="module-card" onclick="openPanel('sms-inbox')">
+          <div id="smsBadge" class="badge sms">3</div>
+          <div class="module-icon">✉️</div>
+          <div class="module-title">接收短信</div>
+          <div class="module-desc">查看收到的短信；进入后未读数量清零</div>
+        </div>
+
+        <div class="module-card" onclick="openPanel('sms-send')">
+          <div class="module-icon">➤</div>
+          <div class="module-title">发送短信</div>
+          <div class="module-desc">输入号码和内容，通过 SIM 卡发送</div>
+        </div>
+
+        <div class="module-card" onclick="openPanel('call-answer')">
+          <div id="missedBadge" class="badge">2</div>
+          <div class="module-icon">☎️</div>
+          <div class="module-title">接听电话</div>
+          <div class="module-desc">处理来电，查看接听、拨出、未接记录</div>
+        </div>
+
+        <div class="module-card" onclick="openPanel('call-dial')">
+          <div class="module-icon">⌕</div>
+          <div class="module-title">拨打电话</div>
+          <div class="module-desc">输入号码，通过 SIM 卡拨出</div>
+        </div>
+      </section>
+
+      <section id="sms-inbox" class="panel">
+        <div class="panel-header">
+          <button class="back" onclick="goHome()">← 返回</button>
+          <div class="panel-title">接收短信</div>
+          <div class="muted">进入后全部视为已读</div>
+        </div>
+        <div class="panel-body">
+          <div class="list">
+            <div class="item">
+              <div class="item-top"><span class="name">HSBC</span><span class="time">今天 09:35</span></div>
+              <div class="content">您的验证码为 482913，请勿向任何人透露。</div>
+            </div>
+            <div class="item">
+              <div class="item-top"><span class="name">+852 9123 4567</span><span class="time">今天 08:20</span></div>
+              <div class="content">今晚见，到了之后发我消息。</div>
+            </div>
+            <div class="item">
+              <div class="item-top"><span class="name">John</span><span class="time">昨天 18:42</span></div>
+              <div class="content">Call me when you are free.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="sms-send" class="panel">
+        <div class="panel-header">
+          <button class="back" onclick="goHome()">← 返回</button>
+          <div class="panel-title">发送短信</div>
+          <div class="muted">通过 Android SIM 发送</div>
+        </div>
+        <div class="panel-body">
+          <div class="form">
+            <label>收件号码
+              <input id="smsTo" placeholder="+85291234567" />
+            </label>
+            <label>短信内容
+              <textarea id="smsText" placeholder="输入短信内容"></textarea>
+            </label>
+            <button class="primary-btn" onclick="sendSms()">发送短信</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="call-answer" class="panel">
+        <div class="panel-header">
+          <button class="back" onclick="goHome()">← 返回</button>
+          <div class="panel-title">接听电话</div>
+          <div class="muted">记录只显示：接听 / 拨出 / 未接</div>
+        </div>
+        <div class="panel-body">
+          <div id="incomingBox" class="incoming">
+            <div class="muted">当前来电</div>
+            <div class="call-number">+852 6000 8888</div>
+            <div class="actions">
+              <button class="primary-btn" onclick="answerCall()">接听</button>
+              <button class="danger-btn" onclick="rejectCall()">拒绝</button>
+            </div>
+          </div>
+
+          <div class="actions" style="margin-bottom: 16px;">
+            <button class="plain-btn" onclick="simulateIncoming()">模拟来电</button>
+          </div>
+
+          <div class="list" id="callLog">
+            <div class="item">
+              <div class="item-top"><span><span class="log-type">📞 接听</span>+852 9123 4567</span><span class="time">今天 14:30</span></div>
+              <div class="content">通话时长：00:05:32</div>
+            </div>
+            <div class="item">
+              <div class="item-top"><span><span class="log-type">📤 拨出</span>HSBC</span><span class="time">今天 13:20</span></div>
+              <div class="content">通话时长：00:01:18</div>
+            </div>
+            <div class="item">
+              <div class="item-top"><span><span class="log-type">❌ 未接</span>John</span><span class="time">今天 10:42</span></div>
+              <div class="content">未接来电</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="call-dial" class="panel">
+        <div class="panel-header">
+          <button class="back" onclick="goHome()">← 返回</button>
+          <div class="panel-title">拨打电话</div>
+          <div class="muted">通过 Android SIM 拨出</div>
+        </div>
+        <div class="panel-body">
+          <div class="call-box">
+            <label>电话号码
+              <input id="dialNumber" placeholder="+85291234567" />
+            </label>
+            <div class="actions" style="margin-top: 16px;">
+              <button class="primary-btn" onclick="dialCall()">拨打电话</button>
+              <button class="danger-btn" onclick="hangupCall()">挂断</button>
+            </div>
+            <p id="dialStatus" class="muted">当前无通话</p>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+  let unreadSms = 3;
+  let missedCalls = 2;
+  let authSeconds = 299;
+  let authInterval = null;
+  let codeCooldown = 0;
+  let codeInterval = null;
+
+  function showToast(message) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+  function sendCode() {
+    const email = document.getElementById('email').value.trim();
+    if (!email) return showToast('请输入邮箱');
+
+    codeCooldown = 60;
+    const btn = document.getElementById('sendCodeBtn');
+    btn.disabled = true;
+    btn.textContent = '60秒';
+
+    clearInterval(codeInterval);
+    codeInterval = setInterval(() => {
+      codeCooldown -= 1;
+      btn.textContent = codeCooldown + '秒';
+      if (codeCooldown <= 0) {
+        clearInterval(codeInterval);
+        btn.disabled = false;
+        btn.textContent = '发送验证码';
+      }
+    }, 1000);
+
+    showToast('验证码已发送（Demo 可输入任意 6 位）');
+  }
+
+  function login() {
+    const email = document.getElementById('email').value.trim();
+    const code = document.getElementById('emailCode').value.trim();
+
+    if (!email) return showToast('请输入邮箱');
+    if (!/^\d{6}$/.test(code)) return showToast('请输入6位验证码');
+
+    document.getElementById('loginPage').style.display = 'none';
+    document.getElementById('mainApp').classList.add('active');
+    authSeconds = 299;
+    startAuthTimer();
+    showToast('登录成功');
+  }
+
+  function logout() {
+    clearInterval(authInterval);
+    document.getElementById('mainApp').classList.remove('active');
+    document.getElementById('loginPage').style.display = 'grid';
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('home').style.display = 'grid';
+    document.getElementById('emailCode').value = '';
+    showToast('已退出登录');
+  }
+
+  function startAuthTimer() {
+    clearInterval(authInterval);
+    updateAuthTimer();
+    authInterval = setInterval(() => {
+      authSeconds -= 1;
+      updateAuthTimer();
+
+      if (authSeconds <= 0) {
+        clearInterval(authInterval);
+        logout();
+        showToast('认证已过期，请重新输入邮箱验证码');
+      }
+    }, 1000);
+  }
+
+  function updateAuthTimer() {
+    const m = String(Math.floor(authSeconds / 60)).padStart(2, '0');
+    const s = String(authSeconds % 60).padStart(2, '0');
+    document.getElementById('authTimer').textContent = `${m}:${s}`;
+  }
+
+  function updateBadges() {
+    const smsBadge = document.getElementById('smsBadge');
+    const missedBadge = document.getElementById('missedBadge');
+
+    smsBadge.textContent = unreadSms;
+    smsBadge.style.display = unreadSms > 0 ? 'grid' : 'none';
+
+    missedBadge.textContent = missedCalls;
+    missedBadge.style.display = missedCalls > 0 ? 'grid' : 'none';
+  }
+
+  function openPanel(id) {
+    document.getElementById('home').style.display = 'none';
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+
+    if (id === 'sms-inbox') {
+      unreadSms = 0;
+      updateBadges();
+      showToast('未读短信已清零');
+    }
+
+    if (id === 'call-answer') {
+      missedCalls = 0;
+      updateBadges();
+      showToast('未接电话提醒已清零');
+    }
+  }
+
+  function goHome() {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('home').style.display = 'grid';
+    updateBadges();
+  }
+
+  function sendSms() {
+    const to = document.getElementById('smsTo').value.trim();
+    const text = document.getElementById('smsText').value.trim();
+    if (!to || !text) return showToast('请输入号码和短信内容');
+    showToast('短信发送指令已提交');
+  }
+
+  function simulateIncoming() {
+    document.getElementById('incomingBox').classList.add('show');
+    showToast('模拟来电：+852 6000 8888');
+  }
+
+  function answerCall() {
+    document.getElementById('incomingBox').classList.remove('show');
+    prependCallLog('📞 接听', '+852 6000 8888', '通话时长：00:00:08');
+    showToast('已接听');
+  }
+
+  function rejectCall() {
+    document.getElementById('incomingBox').classList.remove('show');
+    prependCallLog('❌ 未接', '+852 6000 8888', '未接来电');
+    showToast('已拒绝，记录为未接');
+  }
+
+  function dialCall() {
+    const num = document.getElementById('dialNumber').value.trim();
+    if (!num) return showToast('请输入电话号码');
+    document.getElementById('dialStatus').textContent = '正在拨打：' + num;
+    prependCallLog('📤 拨出', num, '通话中');
+    showToast('拨号指令已提交');
+  }
+
+  function hangupCall() {
+    document.getElementById('dialStatus').textContent = '当前无通话';
+    showToast('挂断指令已提交');
+  }
+
+  function prependCallLog(type, number, detail) {
+    const log = document.getElementById('callLog');
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = `
+      <div class="item-top"><span><span class="log-type">${type}</span>${number}</span><span class="time">刚刚</span></div>
+      <div class="content">${detail}</div>
+    `;
+    log.prepend(item);
+  }
+
+  window.addEventListener('beforeunload', () => {
+    // Demo 中不保存登录状态；真实系统里刷新/关闭也应让服务端会话失效。
+  });
+
+  updateBadges();
+</script>
+</body>
+</html>
