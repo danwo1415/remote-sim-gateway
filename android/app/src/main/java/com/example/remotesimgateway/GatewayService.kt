@@ -1,6 +1,7 @@
 package com.example.remotesimgateway
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
@@ -10,25 +11,29 @@ import com.example.remotesimgateway.security.DeviceIdentity
 class GatewayService : Service() {
     private var wsClient: GatewayWebSocketClient? = null
 
-    override fun onCreate() {
-        super.onCreate()
-
-        Log.i("GatewayService", "Service created")
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i("GatewayService", "Service started")
 
         val identity = DeviceIdentity.getOrCreate(this)
+        val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
+
+        val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
+            ?: prefs.getString("server_url", null)
+            ?: "wss://YOUR_DOMAIN_HERE/ws/device"
+
+        wsClient?.close()
 
         wsClient = GatewayWebSocketClient(
             context = this,
-            serverUrl = "wss://YOUR_DOMAIN_HERE/ws/device",
+            serverUrl = serverUrl,
             deviceId = identity.deviceId,
             deviceKey = identity.deviceKey
         )
 
         wsClient?.connect()
-    }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i("GatewayService", "Service started")
+        Log.i("GatewayService", "Connecting to $serverUrl as ${identity.deviceId}")
+
         return START_STICKY
     }
 
@@ -39,4 +44,8 @@ class GatewayService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        const val EXTRA_SERVER_URL = "server_url"
+    }
 }
