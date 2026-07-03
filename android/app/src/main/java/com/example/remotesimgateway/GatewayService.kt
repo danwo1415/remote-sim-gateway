@@ -19,7 +19,7 @@ class GatewayService : Service() {
 
         val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
             ?: prefs.getString("server_url", null)
-            ?: "wss://YOUR_DOMAIN_HERE/ws/device"
+            ?: "ws://YOUR_VPS_IP:3000/ws/device"
 
         wsClient?.close()
 
@@ -28,7 +28,9 @@ class GatewayService : Service() {
             serverUrl = serverUrl,
             deviceId = identity.deviceId,
             deviceKey = identity.deviceKey
-        )
+        ) { status ->
+            Log.i("GatewayService", status)
+        }
 
         wsClient?.connect()
 
