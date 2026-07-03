@@ -1,4 +1,6 @@
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -8,9 +10,15 @@ import { isDeviceAllowed } from "./auth.js";
 
 const port = Number(process.env.PORT || 3000);
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const webRoot = path.resolve(__dirname, "../../web");
+
 const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false
+}));
 app.use(cors());
 app.use(express.json());
 
@@ -26,6 +34,8 @@ app.get("/health", (_req, res) => {
 app.get("/api/device/status", (_req, res) => {
   res.json(getDeviceStatus());
 });
+
+app.use(express.static(webRoot));
 
 const server = http.createServer(app);
 
