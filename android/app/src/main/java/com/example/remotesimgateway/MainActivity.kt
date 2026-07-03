@@ -33,7 +33,10 @@ class MainActivity : AppCompatActivity() {
 
         val identity = DeviceIdentity.getOrCreate(this)
         val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
-        val savedServerUrl = prefs.getString("server_url", "wss://YOUR_DOMAIN_HERE/ws/device") ?: "wss://YOUR_DOMAIN_HERE/ws/device"
+        val savedServerUrl = prefs.getString(
+            "server_url",
+            "ws://YOUR_VPS_IP:3000/ws/device"
+        ) ?: "ws://YOUR_VPS_IP:3000/ws/device"
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -58,7 +61,7 @@ class MainActivity : AppCompatActivity() {
 
         serverUrlInput = EditText(this).apply {
             setText(savedServerUrl)
-            hint = "wss://your-domain.com/ws/device"
+            hint = "ws://your-vps-ip:3000/ws/device"
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine(true)
         }
@@ -66,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         val grantButton = Button(this).apply {
             text = "Grant Permissions"
             setOnClickListener {
-                requestMissingPermissions()
+                requestMissingPermissions(identity)
             }
         }
 
@@ -74,8 +77,13 @@ class MainActivity : AppCompatActivity() {
             text = "Start Gateway Service"
             setOnClickListener {
                 val serverUrl = serverUrlInput.text.toString().trim()
+
                 if (serverUrl.isEmpty()) {
-                    statusText.text = buildStatusText(identity.deviceId, identity.deviceKey, "Server URL is empty")
+                    statusText.text = buildStatusText(
+                        identity.deviceId,
+                        identity.deviceKey,
+                        "Server URL is empty"
+                    )
                     return@setOnClickListener
                 }
 
@@ -86,7 +94,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 startService(intent)
-                statusText.text = buildStatusText(identity.deviceId, identity.deviceKey, "Gateway service started\nServer: $serverUrl")
+
+                statusText.text = buildStatusText(
+                    identity.deviceId,
+                    identity.deviceKey,
+                    "Gateway service started\nServer: $serverUrl\n\nCheck /api/device/status on VPS."
+                )
             }
         }
 
@@ -99,16 +112,22 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(root)
 
-        requestMissingPermissions()
+        requestMissingPermissions(identity)
     }
 
-    private fun requestMissingPermissions() {
+    private fun requestMissingPermissions(identity: com.example.remotesimgateway.security.Identity) {
         val missing = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1001)
+        } else {
+            statusText.text = buildStatusText(
+                identity.deviceId,
+                identity.deviceKey,
+                "Permissions granted"
+            )
         }
     }
 
