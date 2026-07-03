@@ -1,32 +1,62 @@
-package com.example.remotesimgateway.sms
+package com.example.remotesimgateway
 
-import android.content.BroadcastReceiver
+import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.provider.Telephony
+import android.os.IBinder
 import android.util.Log
-import org.json.JSONObject
+import com.example.remotesimgateway.net.GatewayWebSocketClient
+import com.example.remotesimgateway.security.DeviceIdentity
 
-class SmsReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+class GatewayService : Service() {
+    private var wsClient: GatewayWebSocketClient? = null
 
-        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-        for (msg in messages) {
-            val from = msg.displayOriginatingAddress ?: msg.originatingAddress ?: "unknown"
-            val body = msg.displayMessageBody ?: msg.messageBody ?: ""
-            val timestamp = msg.timestampMillis
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i("GatewayService", "Service started")
 
-            Log.i("SmsReceiver", "SMS from $from: $body")
+        val identity = DeviceIdentity.getOrCreate(this)
+        val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
 
-            // V0.1: For simplicity this only logs locally.
-            // Next step: publish to GatewayService WebSocket via an internal event bus or local broadcast.
-            val payload = JSONObject()
-                .put("from", from)
-                .put("body", body)
-                .put("timestamp", timestamp)
+        val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
+            ?: prefs.getString("server_url", null)
+            ?: "ws://YOUR_VPS_IP:3000/ws/device"
 
-            Log.i("SmsReceiver", "incoming_sms payload: $payload")
+        wsClient?.let {
+            GatewayEventBus.detach(it)
+            it.close()
         }
+
+        val newClient = GatewayWebSocketClient(
+            context = this,
+            serverUrl = serverUrl,
+            deviceId = identity.deviceId,
+            deviceKey = identity.deviceKey
+        ) { status ->
+            Log.i("GatewayService", status)
+        }
+
+        wsClient = newClient
+        GatewayEventBus.attach(newClient)
+        newClient.connect()
+
+        Log.i("GatewayService", "Connecting to $serverUrl as ${identity.deviceId}")
+
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        Log.i("GatewayService", "Service destroyed")
+        wsClient?.let {
+            GatewayEventBus.detach(it)
+            it.close()
+        }
+        wsClient = null
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        const val EXTRA_SERVER_URL = "server_url"
     }
 }
