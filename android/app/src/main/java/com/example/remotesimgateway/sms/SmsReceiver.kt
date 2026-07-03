@@ -1,62 +1,39 @@
-package com.example.remotesimgateway
+package com.example.remotesimgateway.sms
 
-import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.IBinder
+import android.provider.Telephony
 import android.util.Log
-import com.example.remotesimgateway.net.GatewayWebSocketClient
-import com.example.remotesimgateway.security.DeviceIdentity
+import com.example.remotesimgateway.GatewayEventBus
 
-class GatewayService : Service() {
-    private var wsClient: GatewayWebSocketClient? = null
+class SmsReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i("GatewayService", "Service started")
+        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+        if (messages.isEmpty()) return
 
-        val identity = DeviceIdentity.getOrCreate(this)
-        val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
+        val from = messages.firstOrNull()?.displayOriginatingAddress
+            ?: messages.firstOrNull()?.originatingAddress
+            ?: "unknown"
 
-        val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
-            ?: prefs.getString("server_url", null)
-            ?: "ws://YOUR_VPS_IP:3000/ws/device"
-
-        wsClient?.let {
-            GatewayEventBus.detach(it)
-            it.close()
+        val body = messages.joinToString(separator = "") {
+            it.displayMessageBody ?: it.messageBody ?: ""
         }
 
-        val newClient = GatewayWebSocketClient(
-            context = this,
-            serverUrl = serverUrl,
-            deviceId = identity.deviceId,
-            deviceKey = identity.deviceKey
-        ) { status ->
-            Log.i("GatewayService", status)
+        val timestamp = messages.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
+
+        Log.i("SmsReceiver", "Incoming SMS from $from: $body")
+
+        val sent = GatewayEventBus.sendIncomingSms(
+            from = from,
+            body = body,
+            timestamp = timestamp
+        )
+
+        if (!sent) {
+            Log.w("SmsReceiver", "Incoming SMS was not uploaded because gateway is offline")
         }
-
-        wsClient = newClient
-        GatewayEventBus.attach(newClient)
-        newClient.connect()
-
-        Log.i("GatewayService", "Connecting to $serverUrl as ${identity.deviceId}")
-
-        return START_STICKY
-    }
-
-    override fun onDestroy() {
-        Log.i("GatewayService", "Service destroyed")
-        wsClient?.let {
-            GatewayEventBus.detach(it)
-            it.close()
-        }
-        wsClient = null
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    companion object {
-        const val EXTRA_SERVER_URL = "server_url"
     }
 }
