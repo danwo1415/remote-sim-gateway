@@ -22,6 +22,8 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.ANSWER_PHONE_CALLS
     )
 
+    private lateinit var statusText: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -37,7 +39,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 24f
         }
 
-        val status = TextView(this).apply {
+        statusText = TextView(this).apply {
             text = "Device ID:\n${identity.deviceId}\n\nStatus:\nReady to connect"
             textSize = 14f
             setPadding(0, 28, 0, 28)
@@ -45,24 +47,24 @@ class MainActivity : AppCompatActivity() {
 
         val grantButton = Button(this).apply {
             text = "Grant Permissions"
-            setOnClickListener { requestMissingPermissions() }
+            setOnClickListener {
+                requestMissingPermissions()
+            }
         }
 
         val startButton = Button(this).apply {
             text = "Start Gateway Service"
             setOnClickListener {
-                ContextCompat.startForegroundService(
-                    this@MainActivity,
-                    Intent(this@MainActivity, GatewayService::class.java)
-                )
-                status.text = "Device ID:\n${identity.deviceId}\n\nStatus:\nGateway service started"
+                startService(Intent(this@MainActivity, GatewayService::class.java))
+                statusText.text = "Device ID:\n${identity.deviceId}\n\nStatus:\nGateway service started"
             }
         }
 
         root.addView(title)
-        root.addView(status)
+        root.addView(statusText)
         root.addView(grantButton)
         root.addView(startButton)
+
         setContentView(root)
 
         requestMissingPermissions()
@@ -70,10 +72,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestMissingPermissions() {
         val missing = requiredPermissions.filter {
-            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
+
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1001)
+        } else {
+            statusText.text = statusText.text.toString() + "\n\nPermissions:\nGranted"
         }
     }
 }
