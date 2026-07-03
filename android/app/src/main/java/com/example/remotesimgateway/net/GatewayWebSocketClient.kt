@@ -50,7 +50,6 @@ class GatewayWebSocketClient(
 
                 override fun onMessage(ws: WebSocket, text: String) {
                     Log.i("GatewayWS", "Message: $text")
-                    updateStatus("Message received\n$text")
                     handleCommand(text)
                 }
 
@@ -97,7 +96,7 @@ class GatewayWebSocketClient(
         webSocket = null
     }
 
-    fun sendEvent(type: String, payload: JSONObject) {
+    fun sendEvent(type: String, payload: JSONObject): Boolean {
         val body = JSONObject()
             .put("type", type)
             .put("payload", payload)
@@ -107,7 +106,12 @@ class GatewayWebSocketClient(
 
         if (!success) {
             updateStatus("Send failed\n$type")
+            Log.w("GatewayWS", "Send failed: $type")
+        } else {
+            Log.i("GatewayWS", "Sent event: $type")
         }
+
+        return success
     }
 
     private fun handleCommand(raw: String) {
