@@ -30,8 +30,11 @@ class GatewayWebSocketClient(
         .build()
 
     private var webSocket: WebSocket? = null
+    private var shouldReconnect = true
+    private var reconnectAttempts = 0
 
     fun connect() {
+        shouldReconnect = true
         updateStatus("Connecting...\n$serverUrl")
 
         try {
@@ -43,6 +46,7 @@ class GatewayWebSocketClient(
 
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(ws: WebSocket, response: Response) {
+                    reconnectAttempts = 0
                     Log.i("GatewayWS", "Connected")
                     updateStatus("Connected\n$serverUrl")
                     sendEvent("device_online", JSONObject().put("deviceId", deviceId))
@@ -68,12 +72,14 @@ class GatewayWebSocketClient(
 
                     Log.e("GatewayWS", errorText, t)
                     updateStatus(errorText)
+                    scheduleReconnect()
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     val text = "Closed\nCode: $code\nReason: $reason"
                     Log.i("GatewayWS", text)
                     updateStatus(text)
+                    scheduleReconnect()
                 }
 
                 override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -87,10 +93,12 @@ class GatewayWebSocketClient(
             val errorText = "Connect exception\n${e.javaClass.simpleName}\n${e.message ?: "no message"}"
             Log.e("GatewayWS", errorText, e)
             updateStatus(errorText)
+            scheduleReconnect()
         }
     }
 
     fun close() {
+        shouldReconnect = false
         updateStatus("Closing WebSocket")
         webSocket?.close(1000, "Service stopped")
         webSocket = null
@@ -112,6 +120,26 @@ class GatewayWebSocketClient(
         }
 
         return success
+    }
+
+    private fun scheduleReconnect() {
+        if (!shouldReconnect) return
+
+        reconnectAttempts += 1
+        val delayMs = when {
+            reconnectAttempts <= 5 -> 3_000L
+            reconnectAttempts <= 20 -> 10_000L
+            else -> 30_000L
+        }
+
+        updateStatus("Disconnected\nReconnect in ${delayMs / 1000}s\nAttempt: $reconnectAttempts")
+        Log.i("GatewayWS", "Scheduling reconnect in $delayMs ms")
+
+        mainHandler.postDelayed({
+            if (shouldReconnect) {
+                connect()
+            }
+        }, delayMs)
     }
 
     private fun handleCommand(raw: String) {
