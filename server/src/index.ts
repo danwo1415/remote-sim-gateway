@@ -74,7 +74,25 @@ wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: strin
 
   ws.on("message", (raw: RawData) => {
     markDeviceSeen();
-    console.log(`[device] message: ${raw.toString()}`);
+
+    const text = raw.toString();
+    console.log(`[device] message: ${text}`);
+
+    try {
+      const json = JSON.parse(text);
+      const type = json.type;
+      const payload = json.payload || {};
+
+      if (type === "incoming_sms") {
+        console.log("========== INCOMING SMS ==========");
+        console.log(`From: ${payload.from || "unknown"}`);
+        console.log(`Timestamp: ${payload.timestamp || ""}`);
+        console.log(`Body: ${payload.body || ""}`);
+        console.log("==================================");
+      }
+    } catch (error) {
+      console.error("[device] failed to parse message", error);
+    }
   });
 
   ws.on("close", () => {
