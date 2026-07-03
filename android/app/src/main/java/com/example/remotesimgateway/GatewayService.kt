@@ -21,9 +21,12 @@ class GatewayService : Service() {
             ?: prefs.getString("server_url", null)
             ?: "ws://YOUR_VPS_IP:3000/ws/device"
 
-        wsClient?.close()
+        wsClient?.let {
+            GatewayEventBus.detach(it)
+            it.close()
+        }
 
-        wsClient = GatewayWebSocketClient(
+        val newClient = GatewayWebSocketClient(
             context = this,
             serverUrl = serverUrl,
             deviceId = identity.deviceId,
@@ -32,7 +35,9 @@ class GatewayService : Service() {
             Log.i("GatewayService", status)
         }
 
-        wsClient?.connect()
+        wsClient = newClient
+        GatewayEventBus.attach(newClient)
+        newClient.connect()
 
         Log.i("GatewayService", "Connecting to $serverUrl as ${identity.deviceId}")
 
@@ -41,7 +46,11 @@ class GatewayService : Service() {
 
     override fun onDestroy() {
         Log.i("GatewayService", "Service destroyed")
-        wsClient?.close()
+        wsClient?.let {
+            GatewayEventBus.detach(it)
+            it.close()
+        }
+        wsClient = null
         super.onDestroy()
     }
 
