@@ -1,10 +1,13 @@
 package com.example.remotesimgateway
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.text.InputType
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -23,11 +26,14 @@ class MainActivity : AppCompatActivity() {
     )
 
     private lateinit var statusText: TextView
+    private lateinit var serverUrlInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val identity = DeviceIdentity.getOrCreate(this)
+        val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
+        val savedServerUrl = prefs.getString("server_url", "wss://YOUR_DOMAIN_HERE/ws/device") ?: "wss://YOUR_DOMAIN_HERE/ws/device"
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -40,9 +46,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         statusText = TextView(this).apply {
-            text = "Device ID:\n${identity.deviceId}\n\nStatus:\nReady to connect"
+            text = buildStatusText(identity.deviceId, identity.deviceKey, "Ready")
             textSize = 14f
-            setPadding(0, 28, 0, 28)
+            setPadding(0, 28, 0, 20)
+        }
+
+        val serverLabel = TextView(this).apply {
+            text = "Server WebSocket URL"
+            textSize = 14f
+        }
+
+        serverUrlInput = EditText(this).apply {
+            setText(savedServerUrl)
+            hint = "wss://your-domain.com/ws/device"
+            inputType = InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine(true)
         }
 
         val grantButton = Button(this).apply {
@@ -55,13 +73,27 @@ class MainActivity : AppCompatActivity() {
         val startButton = Button(this).apply {
             text = "Start Gateway Service"
             setOnClickListener {
-                startService(Intent(this@MainActivity, GatewayService::class.java))
-                statusText.text = "Device ID:\n${identity.deviceId}\n\nStatus:\nGateway service started"
+                val serverUrl = serverUrlInput.text.toString().trim()
+                if (serverUrl.isEmpty()) {
+                    statusText.text = buildStatusText(identity.deviceId, identity.deviceKey, "Server URL is empty")
+                    return@setOnClickListener
+                }
+
+                prefs.edit().putString("server_url", serverUrl).apply()
+
+                val intent = Intent(this@MainActivity, GatewayService::class.java).apply {
+                    putExtra(GatewayService.EXTRA_SERVER_URL, serverUrl)
+                }
+
+                startService(intent)
+                statusText.text = buildStatusText(identity.deviceId, identity.deviceKey, "Gateway service started\nServer: $serverUrl")
             }
         }
 
         root.addView(title)
         root.addView(statusText)
+        root.addView(serverLabel)
+        root.addView(serverUrlInput)
         root.addView(grantButton)
         root.addView(startButton)
 
@@ -77,8 +109,10 @@ class MainActivity : AppCompatActivity() {
 
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1001)
-        } else {
-            statusText.text = statusText.text.toString() + "\n\nPermissions:\nGranted"
         }
+    }
+
+    private fun buildStatusText(deviceId: String, deviceKey: String, status: String): String {
+        return "Device ID:\n$deviceId\n\nDevice Key:\n$deviceKey\n\nStatus:\n$status"
     }
 }
