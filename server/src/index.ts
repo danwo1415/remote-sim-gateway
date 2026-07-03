@@ -2,7 +2,7 @@ import http from "node:http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket, RawData } from "ws";
 import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
 import { isDeviceAllowed } from "./auth.js";
 
@@ -53,16 +53,16 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, (ws) => {
+  wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
     wss.emit("connection", ws, req, normalizedDeviceId);
   });
 });
 
-wss.on("connection", (ws, _req, deviceId: string) => {
+wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: string) => {
   markDeviceOnline(deviceId);
   console.log(`[device] online: ${deviceId}`);
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw: RawData) => {
     markDeviceSeen();
     console.log(`[device] message: ${raw.toString()}`);
   });
@@ -72,7 +72,7 @@ wss.on("connection", (ws, _req, deviceId: string) => {
     console.log(`[device] offline: ${deviceId}`);
   });
 
-  ws.on("error", (error) => {
+  ws.on("error", (error: Error) => {
     console.error("[device] websocket error", error);
   });
 
