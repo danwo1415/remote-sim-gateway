@@ -8,7 +8,14 @@ import { WebSocketServer, WebSocket, RawData } from "ws";
 import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
 import { isDeviceAllowed } from "./auth.js";
 import { forwardIncomingSmsEmail } from "./mailer.js";
-import { listSmsMessages, parseSmsLimit, saveIncomingSms } from "./smsStore.js";
+import {
+  countSmsMessages,
+  countUnreadSms,
+  listSmsMessages,
+  markAllSmsRead,
+  parseSmsLimit,
+  saveIncomingSms
+} from "./smsStore.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -28,7 +35,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "remote-sim-gateway-server",
-    version: "0.1.0",
+    version: "0.2.2",
     time: new Date().toISOString()
   });
 });
@@ -39,9 +46,20 @@ app.get("/api/device/status", (_req, res) => {
 
 app.get("/api/sms", (req, res) => {
   const messages = listSmsMessages(parseSmsLimit(req.query.limit));
+
   res.json({
-    count: messages.length,
+    count: countSmsMessages(),
+    unreadCount: countUnreadSms(),
     messages
+  });
+});
+
+app.post("/api/sms/mark-read", (_req, res) => {
+  markAllSmsRead();
+
+  res.json({
+    ok: true,
+    unreadCount: countUnreadSms()
   });
 });
 
@@ -98,9 +116,9 @@ wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: strin
 
         console.log("========== INCOMING SMS ==========");
         console.log(`Saved ID: ${savedSms.id}`);
-        console.log(`From: ${payload.from || "unknown"}`);
-        console.log(`Timestamp: ${payload.timestamp || ""}`);
-        console.log(`Body: ${payload.body || ""}`);
+        console.log(`From: ${savedSms.from}`);
+        console.log(`Timestamp: ${savedSms.timestamp || ""}`);
+        console.log(`Body: ${savedSms.body}`);
         console.log("==================================");
 
         void forwardIncomingSmsEmail(deviceId, payload)
