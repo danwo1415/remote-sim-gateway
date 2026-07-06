@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - master
+      - 'codex/**'
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
