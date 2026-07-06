@@ -769,13 +769,40 @@
   let codeInterval = null;
   let lastUnreadCount = 0;
   let currentPanelId = null;
-  const baseTitle = 'Remote SIM Gateway Demo';
+  const baseTitle = 'Remote SIM Gateway';
 
   function showToast(message) {
     const toast = document.getElementById('toast');
     toast.textContent = message;
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+
+  async function requestBrowserNotificationPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch (error) {
+        console.warn('Notification permission request failed', error);
+      }
+    }
+  }
+
+  function notifyNewSms(count) {
+    document.title = `(新短信 ${count}) ${baseTitle}`;
+    showToast(`收到新短信：${count} 条未读`);
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification('Remote SIM Gateway', {
+          body: `收到新短信，当前未读 ${count} 条`
+        });
+      } catch (error) {
+        console.warn('Browser notification failed', error);
+      }
+    }
   }
 
   async function apiGet(url) {
@@ -829,8 +856,11 @@
       const nextUnread = Number(data.unreadCount || 0);
 
       if (nextUnread > lastUnreadCount && currentPanelId !== 'sms-inbox') {
-        document.title = '(新短信) ' + baseTitle;
-        showToast('收到新短信');
+        notifyNewSms(nextUnread);
+      }
+
+      if (nextUnread === 0) {
+        document.title = baseTitle;
       }
 
       unreadSms = nextUnread;
@@ -924,6 +954,7 @@
     document.getElementById('mainApp').classList.add('active');
     authSeconds = 299;
     startAuthTimer();
+    requestBrowserNotificationPermission();
     refreshDeviceStatus();
     refreshSmsCount();
     showToast('登录成功');
