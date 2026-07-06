@@ -1,9 +1,8 @@
 package com.example.remotesimgateway
 
 import android.Manifest
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.widget.Button
@@ -14,29 +13,18 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.remotesimgateway.security.DeviceIdentity
+import com.example.remotesimgateway.security.Identity
 
 class MainActivity : AppCompatActivity() {
-    private val requiredPermissions = arrayOf(
-        Manifest.permission.RECEIVE_SMS,
-        Manifest.permission.READ_SMS,
-        Manifest.permission.SEND_SMS,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.CALL_PHONE,
-        Manifest.permission.ANSWER_PHONE_CALLS
-    )
-
     private lateinit var statusText: TextView
     private lateinit var serverUrlInput: EditText
+    private lateinit var identity: Identity
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val identity = DeviceIdentity.getOrCreate(this)
-        val prefs = getSharedPreferences("remote_sim_gateway_settings", Context.MODE_PRIVATE)
-        val savedServerUrl = prefs.getString(
-            "server_url",
-            "ws://YOUR_VPS_IP:3000/ws/device"
-        ) ?: "ws://YOUR_VPS_IP:3000/ws/device"
+        identity = DeviceIdentity.getOrCreate(this)
+        val savedServerUrl = GatewaySettings.getServerUrl(this)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -69,36 +57,36 @@ class MainActivity : AppCompatActivity() {
         val grantButton = Button(this).apply {
             text = "Grant Permissions"
             setOnClickListener {
-                requestMissingPermissions(identity)
+                if (requestMissingPermissions()) {
+                    autoStartGateway()
+                }
             }
         }
 
         val startButton = Button(this).apply {
-            text = "Start Gateway Service"
+            text = "Save & Start Gateway Service"
             setOnClickListener {
                 val serverUrl = serverUrlInput.text.toString().trim()
 
-                if (serverUrl.isEmpty()) {
+                if (!GatewaySettings.isUsableServerUrl(serverUrl)) {
                     statusText.text = buildStatusText(
                         identity.deviceId,
                         identity.deviceKey,
-                        "Server URL is empty"
+                        "Enter your VPS WebSocket URL first"
                     )
                     return@setOnClickListener
                 }
 
-                prefs.edit().putString("server_url", serverUrl).apply()
-
-                val intent = Intent(this@MainActivity, GatewayService::class.java).apply {
-                    putExtra(GatewayService.EXTRA_SERVER_URL, serverUrl)
-                }
-
-                startService(intent)
+                val started = GatewayServiceStarter.start(this@MainActivity, serverUrl)
 
                 statusText.text = buildStatusText(
                     identity.deviceId,
                     identity.deviceKey,
-                    "Gateway service started\nServer: $serverUrl\n\nCheck /api/device/status on VPS."
+                    if (started) {
+                        "Gateway service started\nServer: $serverUrl\n\nFuture app opens and phone boots will auto-connect."
+                    } else {
+                        "Gateway service was not started"
+                    }
                 )
             }
         }
@@ -112,26 +100,89 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(root)
 
-        requestMissingPermissions(identity)
+        if (requestMissingPermissions()) {
+            autoStartGateway()
+        }
     }
 
-    private fun requestMissingPermissions(identity: com.example.remotesimgateway.security.Identity) {
-        val missing = requiredPermissions.filter {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (requestCode == REQUEST_PERMISSIONS && hasRequiredPermissions()) {
+            autoStartGateway()
+        }
+    }
+
+    private fun requestMissingPermissions(): Boolean {
+        val missing = requiredPermissions().filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
         if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1001)
-        } else {
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_PERMISSIONS)
+            return false
+        }
+
+        return true
+    }
+
+    private fun hasRequiredPermissions(): Boolean {
+        return requiredPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        val permissions = mutableListOf(
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.ANSWER_PHONE_CALLS
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+
+        return permissions.toTypedArray()
+    }
+
+    private fun autoStartGateway() {
+        val serverUrl = GatewaySettings.getServerUrl(this)
+
+        if (!GatewaySettings.isUsableServerUrl(serverUrl)) {
             statusText.text = buildStatusText(
                 identity.deviceId,
                 identity.deviceKey,
-                "Permissions granted"
+                "Permissions granted\nEnter your VPS WebSocket URL and tap Save & Start once."
             )
+            return
         }
+
+        val started = GatewayServiceStarter.start(this, serverUrl)
+
+        statusText.text = buildStatusText(
+            identity.deviceId,
+            identity.deviceKey,
+            if (started) {
+                "Auto-started gateway service\nServer: $serverUrl"
+            } else {
+                "Auto-start skipped\nEnter your VPS WebSocket URL and tap Save & Start once."
+            }
+        )
     }
 
     private fun buildStatusText(deviceId: String, deviceKey: String, status: String): String {
         return "Device ID:\n$deviceId\n\nDevice Key:\n$deviceKey\n\nStatus:\n$status"
+    }
+
+    companion object {
+        private const val REQUEST_PERMISSIONS = 1001
     }
 }

@@ -1,7 +1,9 @@
 package com.example.remotesimgateway
 
+import android.content.Context
 import android.util.Log
 import com.example.remotesimgateway.net.GatewayWebSocketClient
+import com.example.remotesimgateway.sms.IncomingSmsQueue
 import org.json.JSONObject
 
 object GatewayEventBus {
@@ -20,18 +22,21 @@ object GatewayEventBus {
         }
     }
 
-    fun sendIncomingSms(from: String, body: String, timestamp: Long): Boolean {
+    fun sendIncomingSms(context: Context, from: String, body: String, timestamp: Long): Boolean {
+        val appContext = context.applicationContext
         val client = wsClient
-        if (client == null) {
-            Log.w("GatewayEventBus", "Cannot send incoming_sms: WebSocket client is null")
-            return false
-        }
-
         val payload = JSONObject()
             .put("from", from)
             .put("body", body)
             .put("timestamp", timestamp)
 
-        return client.sendEvent("incoming_sms", payload)
+        if (client?.sendEvent("incoming_sms", payload) == true) {
+            return true
+        }
+
+        IncomingSmsQueue.enqueue(appContext, payload)
+        GatewayServiceStarter.start(appContext)
+        Log.w("GatewayEventBus", "incoming_sms queued because gateway is offline")
+        return false
     }
 }

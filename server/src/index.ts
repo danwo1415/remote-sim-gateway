@@ -7,6 +7,7 @@ import helmet from "helmet";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
 import { isDeviceAllowed } from "./auth.js";
+import { forwardIncomingSmsEmail } from "./mailer.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -89,6 +90,16 @@ wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: strin
         console.log(`Timestamp: ${payload.timestamp || ""}`);
         console.log(`Body: ${payload.body || ""}`);
         console.log("==================================");
+
+        void forwardIncomingSmsEmail(deviceId, payload)
+          .then((sent) => {
+            if (sent) {
+              console.log("[mail] incoming SMS forwarded");
+            }
+          })
+          .catch((error: unknown) => {
+            console.error("[mail] failed to forward incoming SMS", error);
+          });
       }
     } catch (error) {
       console.error("[device] failed to parse message", error);

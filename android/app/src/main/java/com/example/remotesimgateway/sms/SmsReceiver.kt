@@ -27,13 +27,14 @@ class SmsReceiver : BroadcastReceiver() {
         Log.i("SmsReceiver", "Incoming SMS from $from: $body")
 
         val sent = GatewayEventBus.sendIncomingSms(
+            context = context,
             from = from,
             body = body,
             timestamp = timestamp
         )
 
         if (!sent) {
-            Log.w("SmsReceiver", "Incoming SMS was not uploaded because gateway is offline")
+            Log.w("SmsReceiver", "Incoming SMS was queued because gateway is offline")
         }
     }
 }

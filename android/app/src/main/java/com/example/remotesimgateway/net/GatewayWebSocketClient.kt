@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.example.remotesimgateway.phone.PhoneController
+import com.example.remotesimgateway.sms.IncomingSmsQueue
 import com.example.remotesimgateway.sms.SmsSender
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -32,9 +33,26 @@ class GatewayWebSocketClient(
     private var webSocket: WebSocket? = null
     private var shouldReconnect = true
     private var reconnectAttempts = 0
+    private var reconnectScheduled = false
+    private var isConnecting = false
+    private var isConnected = false
+
+    private val reconnectRunnable = Runnable {
+        reconnectScheduled = false
+        if (shouldReconnect && !isConnected) {
+            connect()
+        }
+    }
 
     fun connect() {
         shouldReconnect = true
+        if (isConnected || isConnecting) {
+            return
+        }
+
+        mainHandler.removeCallbacks(reconnectRunnable)
+        reconnectScheduled = false
+        isConnecting = true
         updateStatus("Connecting...\n$serverUrl")
 
         try {
@@ -46,10 +64,14 @@ class GatewayWebSocketClient(
 
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(ws: WebSocket, response: Response) {
+                    webSocket = ws
+                    isConnecting = false
+                    isConnected = true
                     reconnectAttempts = 0
                     Log.i("GatewayWS", "Connected")
                     updateStatus("Connected\n$serverUrl")
                     sendEvent("device_online", JSONObject().put("deviceId", deviceId))
+                    flushQueuedSms()
                 }
 
                 override fun onMessage(ws: WebSocket, text: String) {
@@ -70,12 +92,18 @@ class GatewayWebSocketClient(
                         }
                     }
 
+                    isConnecting = false
+                    isConnected = false
+                    webSocket = null
                     Log.e("GatewayWS", errorText, t)
                     updateStatus(errorText)
                     scheduleReconnect()
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    isConnecting = false
+                    isConnected = false
+                    webSocket = null
                     val text = "Closed\nCode: $code\nReason: $reason"
                     Log.i("GatewayWS", text)
                     updateStatus(text)
@@ -91,6 +119,9 @@ class GatewayWebSocketClient(
             })
         } catch (e: Exception) {
             val errorText = "Connect exception\n${e.javaClass.simpleName}\n${e.message ?: "no message"}"
+            isConnecting = false
+            isConnected = false
+            webSocket = null
             Log.e("GatewayWS", errorText, e)
             updateStatus(errorText)
             scheduleReconnect()
@@ -99,6 +130,10 @@ class GatewayWebSocketClient(
 
     fun close() {
         shouldReconnect = false
+        isConnecting = false
+        isConnected = false
+        reconnectScheduled = false
+        mainHandler.removeCallbacks(reconnectRunnable)
         updateStatus("Closing WebSocket")
         webSocket?.close(1000, "Service stopped")
         webSocket = null
@@ -110,7 +145,11 @@ class GatewayWebSocketClient(
             .put("payload", payload)
             .put("timestamp", System.currentTimeMillis())
 
-        val success = webSocket?.send(body.toString()) ?: false
+        val success = if (isConnected) {
+            webSocket?.send(body.toString()) ?: false
+        } else {
+            false
+        }
 
         if (!success) {
             updateStatus("Send failed\n$type")
@@ -122,8 +161,19 @@ class GatewayWebSocketClient(
         return success
     }
 
+    fun flushQueuedSms() {
+        val sentCount = IncomingSmsQueue.flush(context) { payload ->
+            sendEvent("incoming_sms", payload)
+        }
+
+        if (sentCount > 0) {
+            updateStatus("Connected\nFlushed $sentCount queued SMS")
+        }
+    }
+
     private fun scheduleReconnect() {
         if (!shouldReconnect) return
+        if (reconnectScheduled) return
 
         reconnectAttempts += 1
         val delayMs = when {
@@ -135,11 +185,8 @@ class GatewayWebSocketClient(
         updateStatus("Disconnected\nReconnect in ${delayMs / 1000}s\nAttempt: $reconnectAttempts")
         Log.i("GatewayWS", "Scheduling reconnect in $delayMs ms")
 
-        mainHandler.postDelayed({
-            if (shouldReconnect) {
-                connect()
-            }
-        }, delayMs)
+        reconnectScheduled = true
+        mainHandler.postDelayed(reconnectRunnable, delayMs)
     }
 
     private fun handleCommand(raw: String) {
