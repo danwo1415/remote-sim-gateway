@@ -105,6 +105,44 @@
     .card { padding: 18px 20px; margin-bottom: 18px; }
     .status-line { line-height: 1.8; font-size: 14px; }
     .muted { color: var(--muted); }
+    .sms-panel { margin-top: 18px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .section-title { font-size: 18px; font-weight: 760; }
+    .refresh-button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .refresh-button:hover { border-color: var(--primary); color: var(--primary); }
+    .sms-list { display: grid; gap: 10px; }
+    .sms-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .sms-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .sms-from { color: var(--text); font-weight: 700; }
+    .sms-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; font-size: 14px; }
+    .sms-empty { color: var(--muted); padding: 12px 0; }
     @media (max-width: 520px) and (orientation: portrait) {
       .app { padding: 14px 12px 28px; }
       .topbar { align-items: flex-start; flex-direction: column; padding: 15px; margin-bottom: 14px; }
@@ -124,6 +162,8 @@
       .module-title { font-size: 21px; }
       .module-desc { font-size: 12px; }
       .badge { top: 14px; right: 14px; }
+      .section-head { align-items: flex-start; flex-direction: column; }
+      .refresh-button { width: 100%; }
     }
   </style>
 </head>
@@ -149,11 +189,11 @@
 
     <section class="grid">
       <div class="module-card">
-        <div class="badge sms">0</div>
+        <div id="smsCount" class="badge sms">0</div>
         <div class="module-icon">✉️</div>
         <div>
           <div class="module-title">接收短信</div>
-          <div class="module-desc">M2 开始接入短信列表</div>
+          <div id="smsSummary" class="module-desc">正在读取短信</div>
         </div>
       </div>
 
@@ -182,6 +222,17 @@
         </div>
       </div>
     </section>
+
+    <section class="card sms-panel">
+      <div class="section-head">
+        <div>
+          <div class="section-title">接收短信</div>
+          <div id="smsListStatus" class="muted">正在读取短信</div>
+        </div>
+        <button id="refreshSmsButton" class="refresh-button" type="button">刷新</button>
+      </div>
+      <div id="smsList" class="sms-list"></div>
+    </section>
   </main>
 
   <script>
@@ -202,8 +253,82 @@
       }
     }
 
+    async function refreshSmsMessages() {
+      const smsCount = document.getElementById('smsCount');
+      const smsSummary = document.getElementById('smsSummary');
+      const smsListStatus = document.getElementById('smsListStatus');
+      const smsList = document.getElementById('smsList');
+
+      try {
+        const res = await fetch('/api/sms?limit=50', { cache: 'no-store' });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const messages = Array.isArray(data.messages) ? data.messages : [];
+
+        smsCount.textContent = String(data.count ?? messages.length);
+        smsSummary.textContent = messages.length ? `${messages.length} 条短信` : '暂无短信';
+        smsListStatus.textContent = messages.length ? `最近 ${messages.length} 条` : '暂无短信';
+        renderSmsMessages(messages);
+      } catch (error) {
+        smsSummary.textContent = '读取失败';
+        smsListStatus.textContent = '短信读取失败';
+        smsList.replaceChildren();
+      }
+    }
+
+    function renderSmsMessages(messages) {
+      const smsList = document.getElementById('smsList');
+      smsList.replaceChildren();
+
+      if (messages.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'sms-empty';
+        empty.textContent = '暂无短信';
+        smsList.appendChild(empty);
+        return;
+      }
+
+      for (const message of messages) {
+        const item = document.createElement('article');
+        item.className = 'sms-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'sms-meta';
+
+        const from = document.createElement('span');
+        from.className = 'sms-from';
+        from.textContent = message.from || 'unknown';
+
+        const time = document.createElement('span');
+        time.textContent = formatSmsTime(message.receivedAt || message.timestamp);
+
+        const body = document.createElement('div');
+        body.className = 'sms-body';
+        body.textContent = message.body || '';
+
+        meta.append(from, time);
+        item.append(meta, body);
+        smsList.appendChild(item);
+      }
+    }
+
+    function formatSmsTime(value) {
+      if (!value) return '-';
+
+      const date = typeof value === 'number' ? new Date(value) : new Date(String(value));
+      if (Number.isNaN(date.getTime())) return '-';
+
+      return date.toLocaleString('zh-CN', { hour12: false });
+    }
+
     refreshDeviceStatus();
+    refreshSmsMessages();
+    document.getElementById('refreshSmsButton').addEventListener('click', refreshSmsMessages);
     setInterval(refreshDeviceStatus, 3000);
+    setInterval(refreshSmsMessages, 5000);
   </script>
 </body>
 </html>

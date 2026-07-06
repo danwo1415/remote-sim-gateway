@@ -8,6 +8,7 @@ import { WebSocketServer, WebSocket, RawData } from "ws";
 import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
 import { isDeviceAllowed } from "./auth.js";
 import { forwardIncomingSmsEmail } from "./mailer.js";
+import { listSmsMessages, parseSmsLimit, saveIncomingSms } from "./smsStore.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -34,6 +35,14 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/device/status", (_req, res) => {
   res.json(getDeviceStatus());
+});
+
+app.get("/api/sms", (req, res) => {
+  const messages = listSmsMessages(parseSmsLimit(req.query.limit));
+  res.json({
+    count: messages.length,
+    messages
+  });
 });
 
 app.use(express.static(webRoot));
@@ -85,7 +94,10 @@ wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: strin
       const payload = json.payload || {};
 
       if (type === "incoming_sms") {
+        const savedSms = saveIncomingSms(deviceId, payload);
+
         console.log("========== INCOMING SMS ==========");
+        console.log(`Saved ID: ${savedSms.id}`);
         console.log(`From: ${payload.from || "unknown"}`);
         console.log(`Timestamp: ${payload.timestamp || ""}`);
         console.log(`Body: ${payload.body || ""}`);
