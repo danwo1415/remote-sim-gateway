@@ -7,6 +7,13 @@ import helmet from "helmet";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
 import { isDeviceAllowed } from "./auth.js";
+import {
+  saveIncomingSms,
+  listSmsMessages,
+  countSmsMessages,
+  countUnreadSms,
+  markAllSmsRead
+} from "./smsStore.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -26,13 +33,32 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "remote-sim-gateway-server",
-    version: "0.1.0",
+    version: "0.2.2",
     time: new Date().toISOString()
   });
 });
 
 app.get("/api/device/status", (_req, res) => {
   res.json(getDeviceStatus());
+});
+
+app.get("/api/sms", (req, res) => {
+  const limit = Number(req.query.limit || 50);
+
+  res.json({
+    count: countSmsMessages(),
+    unreadCount: countUnreadSms(),
+    messages: listSmsMessages(limit)
+  });
+});
+
+app.post("/api/sms/mark-read", (_req, res) => {
+  markAllSmsRead();
+
+  res.json({
+    ok: true,
+    unreadCount: countUnreadSms()
+  });
 });
 
 app.use(express.static(webRoot));
@@ -84,11 +110,20 @@ wss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: strin
       const payload = json.payload || {};
 
       if (type === "incoming_sms") {
-        console.log("========== INCOMING SMS ==========");
-        console.log(`From: ${payload.from || "unknown"}`);
-        console.log(`Timestamp: ${payload.timestamp || ""}`);
-        console.log(`Body: ${payload.body || ""}`);
-        console.log("==================================");
+        const saved = saveIncomingSms({
+          deviceId,
+          from: payload.from || "unknown",
+          body: payload.body || "",
+          timestamp: payload.timestamp || Date.now(),
+          queuedAt: payload.queuedAt || null
+        });
+
+        console.log("========== INCOMING SMS SAVED ==========");
+        console.log(`ID: ${saved.id}`);
+        console.log(`From: ${saved.from}`);
+        console.log(`Timestamp: ${saved.timestamp}`);
+        console.log(`Body: ${saved.body}`);
+        console.log("========================================");
       }
     } catch (error) {
       console.error("[device] failed to parse message", error);
