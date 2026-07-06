@@ -853,7 +853,7 @@
   async function refreshSmsCount() {
     try {
       const data = await apiGet('/api/sms?limit=1');
-      const nextUnread = Number(data.unreadCount || 0);
+      const nextUnread = Number(data.unreadCount ?? data.count ?? 0);
 
       if (nextUnread > lastUnreadCount && currentPanelId !== 'sms-inbox') {
         notifyNewSms(nextUnread);
