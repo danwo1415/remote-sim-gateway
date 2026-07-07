@@ -16,6 +16,11 @@ type LoginCodeRow = {
   used_at: number | null;
 };
 
+type LoginIdentity = {
+  key: string;
+  label: string;
+};
+
 export type ActiveSession = {
   sessionId: string;
   email: string;
@@ -98,16 +103,11 @@ const deleteExpiredSessions = db.prepare("DELETE FROM sessions WHERE expires_at 
 export async function requestLoginCode(req: Request, res: Response): Promise<void> {
   const email = normalizeEmail(req.body?.email);
   const channel = normalizeLoginCodeChannel(req.body?.channel);
+  const identity = resolveLoginIdentity(channel, email);
 
-  if (!config.allowedLoginEmail) {
-    audit("auth_request_code_blocked", { reason: "missing_allowed_login_email", ip: req.ip });
-    res.status(503).json({ error: "login_not_configured" });
-    return;
-  }
-
-  if (email !== config.allowedLoginEmail) {
-    audit("auth_request_code_denied", { email, ip: req.ip });
-    res.status(403).json({ error: "email_not_allowed" });
+  if (!identity.ok) {
+    audit("auth_request_code_blocked", { channel, email, reason: identity.error, ip: req.ip });
+    res.status(identity.status).json({ error: identity.error });
     return;
   }
 
@@ -115,43 +115,67 @@ export async function requestLoginCode(req: Request, res: Response): Promise<voi
   const now = Date.now();
 
   insertLoginCode.run({
-    email,
-    codeHash: hashLoginCode(email, code),
+    email: identity.value.key,
+    codeHash: hashLoginCode(identity.value.key, code),
     expiresAt: now + config.loginCodeExpireMs,
     createdAt: now
   });
 
   try {
     await sendLoginCode(channel, email, code);
-    audit("auth_request_code", { email, channel, ip: req.ip });
+    audit("auth_request_code", { identity: identity.value.key, channel, ip: req.ip });
     res.json({ ok: true, channel });
   } catch (error) {
-    audit("auth_request_code_failed", { email, channel, ip: req.ip, error: getErrorMessage(error) });
+    audit("auth_request_code_failed", {
+      identity: identity.value.key,
+      channel,
+      ip: req.ip,
+      error: getErrorMessage(error)
+    });
     res.status(503).json({ error: `${channel}_not_available` });
   }
 }
 
 export function login(req: Request, res: Response): void {
   const email = normalizeEmail(req.body?.email);
+  const channel = normalizeLoginCodeChannel(req.body?.channel);
   const code = String(req.body?.code || "").trim();
-  const row = getLatestLoginCode.get({ email }) as LoginCodeRow | undefined;
+  const identity = resolveLoginIdentity(channel, email);
+
+  if (!identity.ok) {
+    audit("auth_login_blocked", { channel, email, ip: req.ip, reason: identity.error });
+    res.status(identity.status).json({ error: identity.error });
+    return;
+  }
+
+  const row = getLatestLoginCode.get({ email: identity.value.key }) as LoginCodeRow | undefined;
   const now = Date.now();
 
   if (!row || row.used_at || row.expires_at <= now) {
-    audit("auth_login_failed", { email, ip: req.ip, reason: "code_expired_or_missing" });
+    audit("auth_login_failed", {
+      identity: identity.value.key,
+      channel,
+      ip: req.ip,
+      reason: "code_expired_or_missing"
+    });
     res.status(401).json({ error: "invalid_code" });
     return;
   }
 
   if (row.attempts >= config.maxLoginAttempts) {
-    audit("auth_login_blocked", { email, ip: req.ip, reason: "too_many_attempts" });
+    audit("auth_login_blocked", {
+      identity: identity.value.key,
+      channel,
+      ip: req.ip,
+      reason: "too_many_attempts"
+    });
     res.status(429).json({ error: "too_many_attempts" });
     return;
   }
 
-  if (row.code_hash !== hashLoginCode(email, code)) {
-    incrementLoginAttempts.run({ email, codeHash: row.code_hash });
-    audit("auth_login_failed", { email, ip: req.ip, reason: "bad_code" });
+  if (row.code_hash !== hashLoginCode(identity.value.key, code)) {
+    incrementLoginAttempts.run({ email: identity.value.key, codeHash: row.code_hash });
+    audit("auth_login_failed", { identity: identity.value.key, channel, ip: req.ip, reason: "bad_code" });
     res.status(401).json({ error: "invalid_code" });
     return;
   }
@@ -160,18 +184,18 @@ export function login(req: Request, res: Response): void {
   const expiresAt = now + config.sessionTimeoutMs;
 
   deleteAllSessions.run();
-  markLoginCodeUsed.run({ email, codeHash: row.code_hash, usedAt: now });
+  markLoginCodeUsed.run({ email: identity.value.key, codeHash: row.code_hash, usedAt: now });
   insertSession.run({
     sessionId,
-    email,
+    email: identity.value.label,
     expiresAt,
     createdAt: now,
     lastSeenAt: now
   });
 
   setSessionCookie(res, sessionId);
-  audit("auth_login", { email, ip: req.ip });
-  res.json({ ok: true, email, expiresAt: new Date(expiresAt).toISOString() });
+  audit("auth_login", { identity: identity.value.key, channel, ip: req.ip });
+  res.json({ ok: true, email: identity.value.label, expiresAt: new Date(expiresAt).toISOString() });
 }
 
 export function logout(req: Request, res: Response): void {
@@ -312,6 +336,41 @@ function normalizeEmail(value: unknown): string {
 
 function normalizeLoginCodeChannel(value: unknown): "email" | "telegram" {
   return value === "telegram" ? "telegram" : "email";
+}
+
+function resolveLoginIdentity(
+  channel: "email" | "telegram",
+  email: string
+): { ok: true; value: LoginIdentity } | { ok: false; status: number; error: string } {
+  if (channel === "telegram") {
+    if (!config.telegram.botToken || !config.telegram.chatId) {
+      return { ok: false, status: 503, error: "telegram_not_available" };
+    }
+
+    return {
+      ok: true,
+      value: {
+        key: `telegram:${config.telegram.chatId}`,
+        label: "Telegram"
+      }
+    };
+  }
+
+  if (!config.allowedLoginEmail) {
+    return { ok: false, status: 503, error: "login_not_configured" };
+  }
+
+  if (email !== config.allowedLoginEmail) {
+    return { ok: false, status: 403, error: "email_not_allowed" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      key: email,
+      label: email
+    }
+  };
 }
 
 async function sendLoginCode(channel: "email" | "telegram", email: string, code: string): Promise<void> {

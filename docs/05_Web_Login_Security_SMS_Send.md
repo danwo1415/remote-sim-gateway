@@ -52,7 +52,19 @@ POST /api/auth/logout
 GET /api/auth/session
 ```
 
-Login uses a 6-digit code delivered by email or Telegram. The allowed login identity still comes from `ALLOWED_LOGIN_EMAIL`.
+Login uses a 6-digit code delivered by email or Telegram.
+
+Email delivery validates the email against:
+
+```text
+ALLOWED_LOGIN_EMAIL
+```
+
+Telegram delivery does not require an email. The trusted Telegram identity comes from:
+
+```text
+TELEGRAM_CHAT_ID
+```
 
 Telegram delivery requires:
 
@@ -61,7 +73,7 @@ TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 ```
 
-The Telegram bot sends the same login code to the configured chat. The Web login still requires the allowed email and the code.
+The Telegram bot sends the login code to the configured chat. The Web login then requires only that code while the Telegram channel is selected.
 
 ## Protected APIs
 
