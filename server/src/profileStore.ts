@@ -5,6 +5,7 @@ export const DEFAULT_PROFILE_ID = "default";
 
 type SimProfileRow = {
   profile_id: string;
+  device_id: string | null;
   subscription_id: string | null;
   icc_id: string | null;
   carrier_name: string | null;
@@ -22,6 +23,7 @@ type SimProfileRow = {
 
 export type SimProfile = {
   profileId: string;
+  deviceId: string | null;
   subscriptionId: string | null;
   iccId: string | null;
   carrierName: string | null;
@@ -47,6 +49,7 @@ export type SmsProfileSelection = {
 db.exec(`
   CREATE TABLE IF NOT EXISTS sim_profiles (
     profile_id TEXT PRIMARY KEY,
+    device_id TEXT,
     subscription_id TEXT,
     icc_id TEXT,
     carrier_name TEXT,
@@ -67,8 +70,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_sim_profiles_default_sms
     ON sim_profiles(is_default_sms);
+
+  CREATE INDEX IF NOT EXISTS idx_sim_profiles_device_id
+    ON sim_profiles(device_id);
 `);
 
+ensureColumn("sim_profiles", "device_id", "TEXT");
 ensureColumn("sim_profiles", "slot_index", "INTEGER");
 ensureColumn("sim_profiles", "created_at", "TEXT");
 ensureColumn("sim_profiles", "updated_at", "TEXT");
@@ -84,6 +91,7 @@ db.exec(`
 const listProfilesStatement = db.prepare(`
   SELECT
     profile_id,
+    device_id,
     subscription_id,
     icc_id,
     carrier_name,
@@ -104,6 +112,7 @@ const listProfilesStatement = db.prepare(`
 const listEnabledProfilesStatement = db.prepare(`
   SELECT
     profile_id,
+    device_id,
     subscription_id,
     icc_id,
     carrier_name,
@@ -125,6 +134,7 @@ const listEnabledProfilesStatement = db.prepare(`
 const getProfileStatement = db.prepare(`
   SELECT
     profile_id,
+    device_id,
     subscription_id,
     icc_id,
     carrier_name,
@@ -142,21 +152,51 @@ const getProfileStatement = db.prepare(`
   WHERE profile_id = @profileId
 `);
 
+const listProfilesByDeviceStatement = db.prepare(`
+  SELECT
+    profile_id,
+    device_id,
+    subscription_id,
+    icc_id,
+    carrier_name,
+    display_name,
+    country,
+    phone_number,
+    slot_index,
+    is_enabled,
+    is_default_sms,
+    is_default_voice,
+    last_seen,
+    created_at,
+    updated_at
+  FROM sim_profiles
+  WHERE device_id = @deviceId
+`);
+
 const clearDefaultSmsStatement = db.prepare(`
   UPDATE sim_profiles
   SET is_default_sms = 0, updated_at = @updatedAt
   WHERE profile_id != @profileId
+    AND ((@deviceId IS NULL AND device_id IS NULL) OR device_id = @deviceId)
 `);
 
 const clearDefaultVoiceStatement = db.prepare(`
   UPDATE sim_profiles
   SET is_default_voice = 0, updated_at = @updatedAt
   WHERE profile_id != @profileId
+    AND ((@deviceId IS NULL AND device_id IS NULL) OR device_id = @deviceId)
+`);
+
+const disableProfileStatement = db.prepare(`
+  UPDATE sim_profiles
+  SET is_enabled = 0, updated_at = @updatedAt
+  WHERE profile_id = @profileId
 `);
 
 const upsertProfileStatement = db.prepare(`
   INSERT INTO sim_profiles (
     profile_id,
+    device_id,
     subscription_id,
     icc_id,
     carrier_name,
@@ -173,6 +213,7 @@ const upsertProfileStatement = db.prepare(`
   )
   VALUES (
     @profileId,
+    @deviceId,
     @subscriptionId,
     @iccId,
     @carrierName,
@@ -188,6 +229,7 @@ const upsertProfileStatement = db.prepare(`
     @updatedAt
   )
   ON CONFLICT(profile_id) DO UPDATE SET
+    device_id = excluded.device_id,
     subscription_id = excluded.subscription_id,
     icc_id = excluded.icc_id,
     carrier_name = excluded.carrier_name,
@@ -225,19 +267,21 @@ export function upsertSimProfile(input: Record<string, unknown>): SimProfile {
   }
 
   const existing = getSimProfile(profileId);
+  const deviceId = normalizeOptionalString(input.deviceId);
   const isDefaultSms = normalizeBoolean(input.isDefaultSms, existing?.isDefaultSms ?? false);
   const isDefaultVoice = normalizeBoolean(input.isDefaultVoice, existing?.isDefaultVoice ?? false);
 
   if (isDefaultSms) {
-    clearDefaultSmsStatement.run({ profileId, updatedAt: now });
+    clearDefaultSmsStatement.run({ profileId, deviceId, updatedAt: now });
   }
 
   if (isDefaultVoice) {
-    clearDefaultVoiceStatement.run({ profileId, updatedAt: now });
+    clearDefaultVoiceStatement.run({ profileId, deviceId, updatedAt: now });
   }
 
   upsertProfileStatement.run({
     profileId,
+    deviceId,
     subscriptionId: normalizeOptionalString(input.subscriptionId),
     iccId: normalizeOptionalString(input.iccId),
     carrierName: normalizeOptionalString(input.carrierName),
@@ -248,7 +292,7 @@ export function upsertSimProfile(input: Record<string, unknown>): SimProfile {
     isEnabled: normalizeBoolean(input.isEnabled, existing?.isEnabled ?? true) ? 1 : 0,
     isDefaultSms: isDefaultSms ? 1 : 0,
     isDefaultVoice: isDefaultVoice ? 1 : 0,
-    lastSeen: normalizeOptionalString(input.lastSeen),
+    lastSeen: normalizeOptionalTimestampString(input.lastSeen),
     createdAt: existing?.createdAt || now,
     updatedAt: now
   });
@@ -259,6 +303,37 @@ export function upsertSimProfile(input: Record<string, unknown>): SimProfile {
   }
 
   return saved;
+}
+
+export function syncDeviceSimProfiles(deviceId: string, value: unknown): SimProfile[] {
+  const profiles = Array.isArray(value) ? value : [];
+  const savedProfiles: SimProfile[] = [];
+  const activeProfileIds = new Set<string>();
+
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== "object") {
+      continue;
+    }
+
+    const saved = upsertSimProfile({
+      ...(profile as Record<string, unknown>),
+      deviceId,
+      isEnabled: true
+    });
+    activeProfileIds.add(saved.profileId);
+    savedProfiles.push(saved);
+  }
+
+  const now = new Date().toISOString();
+  const existingRows = listProfilesByDeviceStatement.all({ deviceId }) as SimProfileRow[];
+
+  for (const row of existingRows) {
+    if (!activeProfileIds.has(row.profile_id)) {
+      disableProfileStatement.run({ profileId: row.profile_id, updatedAt: now });
+    }
+  }
+
+  return savedProfiles;
 }
 
 export function resolveSmsProfile(profileIdInput: unknown): SmsProfileSelection {
@@ -290,6 +365,7 @@ export function resolveSmsProfile(profileIdInput: unknown): SmsProfileSelection 
 function mapProfileRow(row: SimProfileRow): SimProfile {
   return {
     profileId: row.profile_id,
+    deviceId: row.device_id,
     subscriptionId: row.subscription_id,
     iccId: row.icc_id,
     carrierName: row.carrier_name,
@@ -313,6 +389,28 @@ function normalizeOptionalString(value: unknown): string | null {
 
   const text = String(value).trim();
   return text.length > 0 ? text : null;
+}
+
+function normalizeOptionalTimestampString(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return new Date(Math.trunc(value)).toISOString();
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return new Date(Math.trunc(parsed)).toISOString();
+    }
+
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+
+    return value.trim();
+  }
+
+  return null;
 }
 
 function normalizeOptionalInteger(value: unknown): number | null {

@@ -457,6 +457,13 @@
         return;
       }
 
+      if (message.type === 'sim_profiles_updated') {
+        const profiles = Array.isArray(message.payload?.profiles) ? message.payload.profiles : [];
+        currentProfiles = profiles;
+        renderSimProfileOptions(currentProfiles);
+        return;
+      }
+
       if (message.type !== 'sms_received') return;
 
       const payload = message.payload || {};

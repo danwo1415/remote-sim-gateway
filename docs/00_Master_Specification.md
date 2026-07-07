@@ -178,12 +178,14 @@ Suggested Profile structure:
 
 ```text
 profileId
+deviceId
 subscriptionId
 iccId
 carrierName
 displayName
 country
 phoneNumber
+slotIndex
 isEnabled
 isDefaultSms
 isDefaultVoice

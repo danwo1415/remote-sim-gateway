@@ -26,6 +26,7 @@ Implemented table:
 ```sql
 CREATE TABLE sim_profiles (
   profile_id TEXT PRIMARY KEY,
+  device_id TEXT,
   subscription_id TEXT,
   icc_id TEXT,
   carrier_name TEXT,
@@ -41,6 +42,14 @@ CREATE TABLE sim_profiles (
   updated_at TEXT NOT NULL
 );
 ```
+
+Android reports current active SIM/eSIM Profiles after the device WebSocket connects:
+
+```text
+sim_profiles
+```
+
+Server upserts reported Profiles into SQLite and disables Profiles from the same device that are no longer reported as active.
 
 If Android has not reported a complete Profile list yet, the Web still shows:
 
@@ -62,7 +71,7 @@ The Server may return:
 profile selection reserved / default SIM used
 ```
 
-This means the current Android Gateway sent through its default SIM while the Server/Web contract remains Profile-ready.
+This means the Android Gateway sends through the Android system default SMS SIM.
 
 ## Profile APIs
 
@@ -74,6 +83,32 @@ POST /api/sim/profiles
 `GET /api/sim/profiles` returns the default SIM option plus enabled Profiles from SQLite.
 
 `POST /api/sim/profiles` upserts Profile metadata for current/future Android reporting or operator-managed configuration.
+
+## SMS Send Profile Selection
+
+When Web selects a concrete Profile, Server sends:
+
+```json
+{
+  "type": "send_sms",
+  "payload": {
+    "to": "+13022985056",
+    "text": "hello",
+    "profileId": "device-id:subscription:1",
+    "subscriptionId": "1",
+    "slotIndex": 0
+  }
+}
+```
+
+Android uses `SmsManager.getSmsManagerForSubscriptionId(subscriptionId)` to send through that active SIM/Profile.
+
+If the selected Profile is no longer active on the phone, Android returns:
+
+```text
+sms_send_failed
+subscription_not_available
+```
 
 ## Reserved APIs
 

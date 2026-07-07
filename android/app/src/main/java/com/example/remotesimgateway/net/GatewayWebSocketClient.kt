@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.example.remotesimgateway.phone.PhoneController
+import com.example.remotesimgateway.sim.SimProfileReporter
 import com.example.remotesimgateway.sms.IncomingSmsQueue
 import com.example.remotesimgateway.sms.SmsSender
 import okhttp3.OkHttpClient
@@ -71,6 +72,7 @@ class GatewayWebSocketClient(
                     Log.i("GatewayWS", "Connected")
                     updateStatus("Connected\n$serverUrl")
                     sendEvent("device_online", JSONObject().put("deviceId", deviceId))
+                    sendSimProfiles()
                     flushQueuedSms()
                 }
 
@@ -199,8 +201,48 @@ class GatewayWebSocketClient(
                 "send_sms" -> {
                     val to = payload.getString("to")
                     val text = payload.getString("text")
-                    SmsSender.send(context, to, text)
-                    sendEvent("sms_send_submitted", JSONObject().put("to", to))
+                    val profileId = payload.optString("profileId", "default")
+                    val subscriptionId = payload.optionalInt("subscriptionId")
+                    val slotIndex = payload.optionalInt("slotIndex")
+                    val result = try {
+                        SmsSender.send(context, to, text, subscriptionId, slotIndex)
+                    } catch (error: Exception) {
+                        sendEvent(
+                            "sms_send_failed",
+                            JSONObject()
+                                .put("to", to)
+                                .put("profileId", profileId)
+                                .put("subscriptionId", subscriptionId)
+                                .put("slotIndex", slotIndex)
+                                .put("error", error.message ?: error.javaClass.simpleName)
+                        )
+                        return
+                    }
+
+                    if (result.ok) {
+                        sendEvent(
+                            "sms_send_submitted",
+                            JSONObject()
+                                .put("to", to)
+                                .put("profileId", profileId)
+                                .put("subscriptionId", result.subscriptionId)
+                                .put("usedDefaultSim", result.usedDefaultSim)
+                        )
+                    } else {
+                        sendEvent(
+                            "sms_send_failed",
+                            JSONObject()
+                                .put("to", to)
+                                .put("profileId", profileId)
+                                .put("subscriptionId", subscriptionId)
+                                .put("slotIndex", slotIndex)
+                                .put("error", result.error ?: "send_failed")
+                        )
+                    }
+                }
+
+                "refresh_sim_profiles" -> {
+                    sendSimProfiles()
                 }
 
                 "dial_call" -> {
@@ -237,6 +279,23 @@ class GatewayWebSocketClient(
     private fun updateStatus(message: String) {
         mainHandler.post {
             statusCallback?.invoke(message)
+        }
+    }
+
+    private fun sendSimProfiles() {
+        sendEvent("sim_profiles", SimProfileReporter.buildPayload(context, deviceId))
+    }
+
+    private fun JSONObject.optionalInt(name: String): Int? {
+        if (!has(name) || isNull(name)) {
+            return null
+        }
+
+        val value = opt(name)
+        return when (value) {
+            is Number -> value.toInt()
+            is String -> value.toIntOrNull()
+            else -> null
         }
     }
 }

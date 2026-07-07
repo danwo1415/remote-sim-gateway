@@ -183,8 +183,10 @@ Server responsibilities:
 
 Android responsibilities:
 
-- Send the actual SMS through the existing gateway capability
-- If Android cannot target a specific Profile yet, send through the default SIM and let Server return `profile selection reserved / default SIM used`
+- Report current active SIM/eSIM Profiles to Server after `/ws/device` connects
+- Send the actual SMS through the selected `subscriptionId` when a Profile is selected
+- Send through the Android system default SMS SIM when `profileId` is `default`
+- Return `sms_send_failed` with `subscription_not_available` if the selected Profile is no longer active on the phone
 
 ## Telegram Bot SMS Send
 
@@ -211,6 +213,7 @@ Rules:
 - It writes audit logs.
 - It does not require a Web Session.
 - It sends through the current online Android `/ws/device`.
+- It uses the Android system default SMS SIM for now.
 
 Telegram replies:
 

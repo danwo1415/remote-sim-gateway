@@ -14,6 +14,7 @@ import {
   DEFAULT_PROFILE_ID,
   listEnabledSimProfiles,
   resolveSmsProfile,
+  syncDeviceSimProfiles,
   upsertSimProfile
 } from "./profileStore.js";
 import {
@@ -256,6 +257,40 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       const json = JSON.parse(text);
       const type = json.type;
       const payload = json.payload || {};
+
+      if (type === "sim_profiles") {
+        const profiles = syncDeviceSimProfiles(deviceId, payload.profiles);
+        audit("sim_profiles_sync", {
+          deviceId,
+          count: profiles.length,
+          error: payload.error
+        });
+
+        broadcastBrowserEvent("sim_profiles_updated", {
+          profiles: listEnabledSimProfiles()
+        });
+      }
+
+      if (type === "sms_send_submitted") {
+        audit("android_sms_send_submitted", {
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          usedDefaultSim: payload.usedDefaultSim
+        });
+      }
+
+      if (type === "sms_send_failed") {
+        audit("android_sms_send_failed", {
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          slotIndex: payload.slotIndex,
+          error: payload.error
+        });
+      }
 
       if (type === "incoming_sms") {
         const savedSms = saveIncomingSms(deviceId, payload);
