@@ -248,7 +248,7 @@
         <div class="status-line"><strong>Last Seen：</strong><span id="lastSeenAt" class="muted">-</span></div>
       </section>
 
-      <section class="grid">
+      <section id="moduleHome" class="grid">
         <div id="receiveSmsModule" class="module-card action" role="button" tabindex="0">
           <div id="smsCount" class="badge sms">0</div>
           <div class="module-icon">✉</div>
@@ -284,25 +284,35 @@
         </div>
       </section>
 
-      <section id="smsPanel" class="card">
+      <section id="smsPanel" class="card hidden">
         <div class="section-head">
           <div>
             <div class="section-title">接收短信</div>
             <div id="smsListStatus" class="muted">正在读取短信</div>
           </div>
-          <button id="refreshSmsButton" class="button" type="button">刷新</button>
+          <div class="actions">
+            <button id="backFromSmsButton" class="button" type="button">返回</button>
+            <button id="refreshSmsButton" class="button" type="button">刷新</button>
+          </div>
         </div>
         <div id="smsList" class="sms-list"></div>
       </section>
 
-      <section id="sendPanel" class="card">
+      <section id="sendPanel" class="card hidden">
         <div class="section-head">
           <div>
             <div class="section-title">发送短信</div>
             <div class="muted">Server 校验权限和限频，Android Gateway 执行发送</div>
           </div>
+          <button id="backFromSendButton" class="button" type="button">返回</button>
         </div>
         <div class="form-grid">
+          <div class="field">
+            <label for="smsProfileSelect">SIM / Profile</label>
+            <select id="smsProfileSelect">
+              <option value="default">默认 SIM</option>
+            </select>
+          </div>
           <div class="field">
             <label for="smsToInput">号码</label>
             <input id="smsToInput" type="tel" autocomplete="tel" placeholder="+1234567890" />
@@ -326,6 +336,11 @@
     let lastUnreadCount = null;
     let smsPollTimer = null;
     let devicePollTimer = null;
+    let browserSocket = null;
+    let browserReconnectTimer = null;
+    let browserSocketClosing = false;
+    let currentSmsMessages = [];
+    let currentProfiles = [];
 
     async function api(path, options = {}) {
       const res = await fetch(path, {
@@ -369,11 +384,17 @@
       document.getElementById('loginPanel').classList.add('hidden');
       document.getElementById('mainApp').classList.remove('hidden');
       document.getElementById('sessionEmail').textContent = email || '-';
+      clearInterval(devicePollTimer);
+      clearInterval(smsPollTimer);
+      closeBrowserSocket();
+      showHome();
       requestNotificationPermission();
       refreshDeviceStatus();
       refreshSmsMessages();
+      refreshSimProfiles();
+      connectBrowserSocket();
       devicePollTimer = setInterval(refreshDeviceStatus, 3000);
-      smsPollTimer = setInterval(refreshSmsMessages, 5000);
+      smsPollTimer = setInterval(refreshSmsMessages, 60000);
     }
 
     function setLoggedOut() {
@@ -382,7 +403,77 @@
       document.getElementById('loginPanel').classList.remove('hidden');
       clearInterval(devicePollTimer);
       clearInterval(smsPollTimer);
+      closeBrowserSocket();
+      lastUnreadCount = null;
+      currentSmsMessages = [];
+      currentProfiles = [];
       updateUnreadIndicators(0);
+    }
+
+    function connectBrowserSocket() {
+      if (!authenticated || !('WebSocket' in window)) return;
+
+      browserSocketClosing = false;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      browserSocket = new WebSocket(`${protocol}//${window.location.host}/ws/browser`);
+
+      browserSocket.addEventListener('message', (event) => {
+        try {
+          handleBrowserSocketMessage(JSON.parse(event.data));
+        } catch {
+        }
+      });
+
+      browserSocket.addEventListener('close', () => {
+        browserSocket = null;
+        if (browserSocketClosing) {
+          browserSocketClosing = false;
+          return;
+        }
+
+        if (authenticated) {
+          clearTimeout(browserReconnectTimer);
+          browserReconnectTimer = setTimeout(connectBrowserSocket, 3000);
+        }
+      });
+    }
+
+    function closeBrowserSocket() {
+      clearTimeout(browserReconnectTimer);
+      browserReconnectTimer = null;
+
+      if (browserSocket) {
+        browserSocketClosing = true;
+        browserSocket.close();
+        browserSocket = null;
+      }
+    }
+
+    function handleBrowserSocketMessage(message) {
+      if (message.type === 'browser_hello') {
+        const unreadCount = Number(message.payload?.unreadCount || 0);
+        updateUnreadIndicators(unreadCount);
+        lastUnreadCount = unreadCount;
+        return;
+      }
+
+      if (message.type !== 'sms_received') return;
+
+      const payload = message.payload || {};
+      const sms = payload.message;
+      const unreadCount = Number(payload.unreadCount || 0);
+
+      if (sms) {
+        upsertSmsMessage(sms);
+      }
+
+      updateSmsSummary();
+      maybeNotifyNewSms(unreadCount, sms);
+      updateUnreadIndicators(unreadCount);
+
+      if (!document.getElementById('smsPanel').classList.contains('hidden')) {
+        void markSmsRead();
+      }
     }
 
     async function requestCode() {
@@ -490,9 +581,9 @@
         const messages = Array.isArray(data.messages) ? data.messages : [];
         const unreadCount = Number(data.unreadCount || 0);
 
-        smsSummary.textContent = messages.length ? `${messages.length} 条短信` : '暂无短信';
-        smsListStatus.textContent = messages.length ? `最近 ${messages.length} 条` : '暂无短信';
-        renderSmsMessages(messages);
+        currentSmsMessages = messages;
+        updateSmsSummary();
+        renderSmsMessages(currentSmsMessages);
         maybeNotifyNewSms(unreadCount);
         updateUnreadIndicators(unreadCount);
       } catch (error) {
@@ -504,6 +595,26 @@
         smsSummary.textContent = '读取失败';
         smsListStatus.textContent = '短信读取失败';
         smsList.replaceChildren();
+      }
+    }
+
+    function updateSmsSummary() {
+      const smsSummary = document.getElementById('smsSummary');
+      const smsListStatus = document.getElementById('smsListStatus');
+      const count = currentSmsMessages.length;
+
+      smsSummary.textContent = count ? `${count} 条短信` : '暂无短信';
+      smsListStatus.textContent = count ? `最近 ${count} 条` : '暂无短信';
+    }
+
+    function upsertSmsMessage(message) {
+      currentSmsMessages = [
+        message,
+        ...currentSmsMessages.filter((item) => item.id !== message.id)
+      ].slice(0, 50);
+
+      if (!document.getElementById('smsPanel').classList.contains('hidden')) {
+        renderSmsMessages(currentSmsMessages);
       }
     }
 
@@ -553,21 +664,59 @@
       }
     }
 
+    async function refreshSimProfiles() {
+      if (!authenticated) return;
+
+      try {
+        const data = await api('/api/sim/profiles');
+        currentProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+        renderSimProfileOptions(currentProfiles);
+      } catch (error) {
+        if (error.status === 401) {
+          setLoggedOut();
+        }
+      }
+    }
+
+    function renderSimProfileOptions(profiles) {
+      const select = document.getElementById('smsProfileSelect');
+      const previousValue = select.value || 'default';
+
+      select.replaceChildren();
+      select.appendChild(new Option('默认 SIM', 'default'));
+
+      for (const profile of profiles) {
+        if (!profile.isEnabled) continue;
+
+        const labelParts = [
+          profile.displayName || profile.profileId,
+          profile.phoneNumber || '',
+          profile.carrierName || ''
+        ].filter(Boolean);
+
+        select.appendChild(new Option(labelParts.join(' · '), profile.profileId));
+      }
+
+      const hasPrevious = Array.from(select.options).some((option) => option.value === previousValue);
+      select.value = hasPrevious ? previousValue : 'default';
+    }
+
     async function sendSms() {
       const to = document.getElementById('smsToInput').value.trim();
       const text = document.getElementById('smsTextInput').value.trim();
+      const profileId = document.getElementById('smsProfileSelect').value || 'default';
       const status = document.getElementById('sendSmsStatus');
 
       status.className = 'muted';
       status.textContent = '正在提交发送';
 
       try {
-        await api('/api/sms/send', {
+        const data = await api('/api/sms/send', {
           method: 'POST',
-          body: JSON.stringify({ to, text })
+          body: JSON.stringify({ to, text, profileId })
         });
         status.className = 'success';
-        status.textContent = '已提交给 Android Gateway';
+        status.textContent = data.note ? '已提交给 Android Gateway（默认 SIM）' : '已提交给 Android Gateway';
         document.getElementById('smsTextInput').value = '';
       } catch (error) {
         status.className = 'error';
@@ -577,15 +726,19 @@
           status.textContent = '发送过于频繁，请稍后再试';
         } else if (error.message === 'to_and_text_required') {
           status.textContent = '号码和内容不能为空';
+        } else if (error.message === 'profile_not_found') {
+          status.textContent = 'Profile 不存在';
+        } else if (error.message === 'profile_disabled') {
+          status.textContent = 'Profile 未启用';
         } else {
           status.textContent = '发送失败';
         }
       }
     }
 
-    function maybeNotifyNewSms(unreadCount) {
-      if (lastUnreadCount !== null && unreadCount > lastUnreadCount && document.hidden) {
-        showSmsNotification(unreadCount);
+    function maybeNotifyNewSms(unreadCount, message = null) {
+      if (lastUnreadCount !== null && unreadCount > lastUnreadCount) {
+        showSmsNotification(unreadCount, message);
       }
 
       lastUnreadCount = unreadCount;
@@ -647,13 +800,16 @@
       }
     }
 
-    function showSmsNotification(unreadCount) {
+    function showSmsNotification(unreadCount, message = null) {
       if (!('Notification' in window) || Notification.permission !== 'granted') {
         return;
       }
 
+      const from = message?.from ? `From: ${message.from}\n` : '';
+      const body = message?.body ? `${from}${message.body}` : `收到 ${unreadCount} 条未读短信`;
+
       new Notification('Remote SIM Gateway', {
-        body: `收到 ${unreadCount} 条未读短信`
+        body
       });
     }
 
@@ -664,6 +820,20 @@
       if (Number.isNaN(date.getTime())) return '-';
 
       return date.toLocaleString('zh-CN', { hour12: false });
+    }
+
+    function showHome() {
+      document.getElementById('moduleHome').classList.remove('hidden');
+      document.getElementById('smsPanel').classList.add('hidden');
+      document.getElementById('sendPanel').classList.add('hidden');
+      window.scrollTo(0, 0);
+    }
+
+    function showPanel(panel) {
+      document.getElementById('moduleHome').classList.add('hidden');
+      document.getElementById('smsPanel').classList.toggle('hidden', panel !== 'sms');
+      document.getElementById('sendPanel').classList.toggle('hidden', panel !== 'send');
+      window.scrollTo(0, 0);
     }
 
     function wireModuleAction(id, callback) {
@@ -682,13 +852,16 @@
     document.getElementById('loginChannel').addEventListener('change', syncLoginChannelUi);
     document.getElementById('logoutButton').addEventListener('click', logout);
     document.getElementById('refreshSmsButton').addEventListener('click', refreshSmsMessages);
+    document.getElementById('backFromSmsButton').addEventListener('click', showHome);
+    document.getElementById('backFromSendButton').addEventListener('click', showHome);
     document.getElementById('sendSmsButton').addEventListener('click', sendSms);
     wireModuleAction('receiveSmsModule', () => {
-      document.getElementById('smsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showPanel('sms');
       void markSmsRead();
     });
     wireModuleAction('sendSmsModule', () => {
-      document.getElementById('sendPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showPanel('send');
+      void refreshSimProfiles();
     });
 
     syncLoginChannelUi();

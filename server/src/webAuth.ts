@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import { db } from "./db.js";
 import { audit } from "./audit.js";
@@ -212,8 +213,7 @@ export function logout(req: Request, res: Response): void {
 }
 
 export function sessionStatus(req: Request, res: Response): void {
-  const sessionId = getSessionCookie(req);
-  const session = sessionId ? findActiveSession(sessionId, true) : null;
+  const session = getRequestSession(req, true);
 
   if (!session) {
     res.status(401).json({ authenticated: false });
@@ -228,8 +228,7 @@ export function sessionStatus(req: Request, res: Response): void {
 }
 
 export function requireSession(req: Request, res: Response, next: NextFunction): void {
-  const sessionId = getSessionCookie(req);
-  const session = sessionId ? findActiveSession(sessionId, true) : null;
+  const session = getRequestSession(req, true);
 
   if (!session) {
     res.status(401).json({ error: "unauthorized" });
@@ -242,6 +241,11 @@ export function requireSession(req: Request, res: Response, next: NextFunction):
 
 export function getResponseSession(res: Response): ActiveSession {
   return res.locals.session as ActiveSession;
+}
+
+export function getRequestSession(req: Request | IncomingMessage, extend: boolean): ActiveSession | null {
+  const sessionId = getSessionCookie(req);
+  return sessionId ? findActiveSession(sessionId, extend) : null;
 }
 
 function findActiveSession(sessionId: string, extend: boolean): ActiveSession | null {
@@ -282,7 +286,7 @@ function clearSessionCookie(res: Response): void {
   }));
 }
 
-function getSessionCookie(req: Request): string | null {
+function getSessionCookie(req: Request | IncomingMessage): string | null {
   const cookies = parseCookieHeader(req.headers.cookie || "");
   return cookies[SESSION_COOKIE] || null;
 }

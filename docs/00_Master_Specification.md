@@ -134,9 +134,11 @@ When a new SMS arrives:
 ```text
 SQLite save
   |
+Email/Telegram forwarding, when configured
+  |
 Unread count update
   |
-Web notification
+Browser WebSocket notification
   |
 Browser Badge, when supported
   |
@@ -146,6 +148,14 @@ Browser title update
 ```
 
 Entering the Receive SMS page marks messages as read.
+
+Telegram Bot scope is limited to:
+
+- Login verification code
+- Incoming SMS forwarding
+- SMS send command
+
+Do not implement Telegram call answer, call dial, or hangup commands.
 
 ## SIM Profile Architecture
 

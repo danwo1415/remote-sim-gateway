@@ -35,7 +35,9 @@ Android APK should stay stable and should not receive business logic.
 
 - Login uses email or Telegram verification code only.
 - No passwords.
-- All Web APIs must validate Session, except `/api/auth/*` and `/health`.
+- All Web APIs must validate Session, except `/api/auth/*`, `/api/telegram/webhook`, and `/health`.
+- `/ws/browser` must validate the current Web Session cookie.
+- `/api/telegram/webhook` must validate `TELEGRAM_CHAT_ID` before accepting SMS send commands.
 - Sensitive operations must write audit logs.
 
 ## Database Rules

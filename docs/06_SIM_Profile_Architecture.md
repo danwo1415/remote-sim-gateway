@@ -21,7 +21,7 @@ A future Android Gateway may contain many eSIM Profiles, while only a small numb
 
 ## SQLite Table
 
-Future table:
+Implemented table:
 
 ```sql
 CREATE TABLE sim_profiles (
@@ -29,15 +29,51 @@ CREATE TABLE sim_profiles (
   subscription_id TEXT,
   icc_id TEXT,
   carrier_name TEXT,
-  display_name TEXT,
+  display_name TEXT NOT NULL,
   country TEXT,
   phone_number TEXT,
-  is_enabled INTEGER NOT NULL DEFAULT 0,
+  slot_index INTEGER,
+  is_enabled INTEGER NOT NULL DEFAULT 1,
   is_default_sms INTEGER NOT NULL DEFAULT 0,
   is_default_voice INTEGER NOT NULL DEFAULT 0,
-  last_seen TEXT
+  last_seen TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 ```
+
+If Android has not reported a complete Profile list yet, the Web still shows:
+
+```text
+默认 SIM
+```
+
+and sends:
+
+```json
+{
+  "profileId": "default"
+}
+```
+
+The Server may return:
+
+```text
+profile selection reserved / default SIM used
+```
+
+This means the current Android Gateway sent through its default SIM while the Server/Web contract remains Profile-ready.
+
+## Profile APIs
+
+```text
+GET /api/sim/profiles
+POST /api/sim/profiles
+```
+
+`GET /api/sim/profiles` returns the default SIM option plus enabled Profiles from SQLite.
+
+`POST /api/sim/profiles` upserts Profile metadata for current/future Android reporting or operator-managed configuration.
 
 ## Reserved APIs
 
@@ -71,7 +107,7 @@ Do not bypass Android permissions.
 
 ## Web SIM Management
 
-Future Web UI should list Profiles:
+Web UI should list Profiles:
 
 ```text
 ○ China Mobile
