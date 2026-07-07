@@ -20,6 +20,9 @@ SMTP_USER="smtp-user@example.com"
 SMTP_PASS="smtp-password-or-app-password"
 SMTP_FROM="Remote SIM Gateway <smtp-user@example.com>"
 
+TELEGRAM_BOT_TOKEN="123456:bot-token"
+TELEGRAM_CHAT_ID="123456789"
+
 SMS_FORWARD_TO="target@example.com"
 
 SESSION_TIMEOUT="300"
@@ -30,7 +33,7 @@ PORT="3000"
 SQLITE_PATH="/opt/remote-sim-gateway/remote-sim-gateway.sqlite"
 ```
 
-To change email, SMTP, Session, SMS rate limit, port, or SQLite:
+To change email, Telegram, SMTP, Session, SMS rate limit, port, or SQLite:
 
 ```bash
 cd /opt/remote-sim-gateway
@@ -49,7 +52,16 @@ POST /api/auth/logout
 GET /api/auth/session
 ```
 
-Login uses a 6-digit email code. The allowed email comes from `ALLOWED_LOGIN_EMAIL`.
+Login uses a 6-digit code delivered by email or Telegram. The allowed login identity still comes from `ALLOWED_LOGIN_EMAIL`.
+
+Telegram delivery requires:
+
+```text
+TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID
+```
+
+The Telegram bot sends the same login code to the configured chat. The Web login still requires the allowed email and the code.
 
 ## Protected APIs
 

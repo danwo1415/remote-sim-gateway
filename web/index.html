@@ -136,7 +136,7 @@
     .form-grid { display: grid; gap: 12px; }
     .field { display: grid; gap: 6px; }
     .field label { color: var(--muted); font-size: 13px; }
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -199,13 +199,20 @@
       <div class="section-head">
         <div>
           <div class="section-title">登录</div>
-          <div class="muted">使用邮箱验证码进入 Remote SIM Gateway</div>
+          <div class="muted">使用邮箱或 Telegram 验证码进入 Remote SIM Gateway</div>
         </div>
       </div>
       <div class="form-grid">
         <div class="field">
           <label for="loginEmail">邮箱</label>
           <input id="loginEmail" type="email" autocomplete="email" placeholder="name@example.com" />
+        </div>
+        <div class="field">
+          <label for="loginChannel">验证码接收方式</label>
+          <select id="loginChannel">
+            <option value="email">邮箱</option>
+            <option value="telegram">Telegram</option>
+          </select>
         </div>
         <div class="actions">
           <button id="requestCodeButton" class="button" type="button">获取验证码</button>
@@ -380,6 +387,7 @@
 
     async function requestCode() {
       const email = document.getElementById('loginEmail').value.trim();
+      const channel = document.getElementById('loginChannel').value;
       const status = document.getElementById('loginStatus');
       status.className = 'muted';
       status.textContent = '正在发送验证码';
@@ -387,10 +395,10 @@
       try {
         await api('/api/auth/request-code', {
           method: 'POST',
-          body: JSON.stringify({ email })
+          body: JSON.stringify({ email, channel })
         });
         status.className = 'success';
-        status.textContent = '验证码已发送';
+        status.textContent = channel === 'telegram' ? '验证码已发送到 Telegram' : '验证码已发送到邮箱';
       } catch (error) {
         status.className = 'error';
         status.textContent = authErrorText(error);
@@ -428,6 +436,8 @@
     function authErrorText(error) {
       if (error.message === 'email_not_allowed') return '邮箱不在允许列表';
       if (error.message === 'smtp_not_available') return 'SMTP 未配置或不可用';
+      if (error.message === 'email_not_available') return '邮箱验证码不可用';
+      if (error.message === 'telegram_not_available') return 'Telegram 未配置或不可用';
       if (error.message === 'invalid_code') return '验证码错误或已过期';
       if (error.message === 'too_many_attempts') return '尝试次数过多';
       if (error.message === 'login_not_configured') return '登录邮箱未配置';

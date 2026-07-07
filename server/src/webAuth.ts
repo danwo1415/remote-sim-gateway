@@ -4,6 +4,7 @@ import { db } from "./db.js";
 import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { sendLoginCodeEmail } from "./mailer.js";
+import { sendLoginCodeTelegram } from "./telegram.js";
 
 const SESSION_COOKIE = "rsg_session";
 
@@ -96,6 +97,7 @@ const deleteExpiredSessions = db.prepare("DELETE FROM sessions WHERE expires_at 
 
 export async function requestLoginCode(req: Request, res: Response): Promise<void> {
   const email = normalizeEmail(req.body?.email);
+  const channel = normalizeLoginCodeChannel(req.body?.channel);
 
   if (!config.allowedLoginEmail) {
     audit("auth_request_code_blocked", { reason: "missing_allowed_login_email", ip: req.ip });
@@ -120,12 +122,12 @@ export async function requestLoginCode(req: Request, res: Response): Promise<voi
   });
 
   try {
-    await sendLoginCodeEmail(email, code);
-    audit("auth_request_code", { email, ip: req.ip });
-    res.json({ ok: true });
+    await sendLoginCode(channel, email, code);
+    audit("auth_request_code", { email, channel, ip: req.ip });
+    res.json({ ok: true, channel });
   } catch (error) {
-    audit("auth_request_code_failed", { email, ip: req.ip, error: getErrorMessage(error) });
-    res.status(503).json({ error: "smtp_not_available" });
+    audit("auth_request_code_failed", { email, channel, ip: req.ip, error: getErrorMessage(error) });
+    res.status(503).json({ error: `${channel}_not_available` });
   }
 }
 
@@ -306,6 +308,19 @@ function hashLoginCode(email: string, code: string): string {
 
 function normalizeEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeLoginCodeChannel(value: unknown): "email" | "telegram" {
+  return value === "telegram" ? "telegram" : "email";
+}
+
+async function sendLoginCode(channel: "email" | "telegram", email: string, code: string): Promise<void> {
+  if (channel === "telegram") {
+    await sendLoginCodeTelegram(code);
+    return;
+  }
+
+  await sendLoginCodeEmail(email, code);
 }
 
 function getErrorMessage(error: unknown): string {

@@ -29,11 +29,11 @@ Android APK should stay stable and should not receive business logic.
 - Use `/opt/remote-sim-gateway/.env` for runtime settings.
 - Do not commit `.env`.
 - Do not commit SMTP passwords or secrets.
-- Changing email, SMTP, Session, SQLite, or port configuration must not require GitHub changes.
+- Changing email, Telegram, SMTP, Session, SQLite, or port configuration must not require GitHub changes.
 
 ## Security Rules
 
-- Login uses email verification code only.
+- Login uses email or Telegram verification code only.
 - No passwords.
 - All Web APIs must validate Session, except `/api/auth/*` and `/health`.
 - Sensitive operations must write audit logs.

@@ -30,6 +30,10 @@ export const config = {
     from: process.env.SMS_FORWARD_FROM?.trim() || process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim() || "",
     subjectPrefix: process.env.SMS_FORWARD_SUBJECT_PREFIX?.trim() || "[Remote SIM Gateway]"
   },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || "",
+    chatId: process.env.TELEGRAM_CHAT_ID?.trim() || ""
+  },
   cookieSecure: readBoolean("SESSION_COOKIE_SECURE") ?? false
 };
 

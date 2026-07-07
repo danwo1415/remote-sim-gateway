@@ -86,6 +86,8 @@ SMTP_PORT
 SMTP_USER
 SMTP_PASS
 SMTP_FROM
+TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID
 SESSION_TIMEOUT
 LOGIN_CODE_EXPIRE
 MAX_LOGIN_ATTEMPTS
@@ -106,7 +108,7 @@ Do not hard-code runtime configuration in GitHub.
 
 ## Security
 
-- Login uses email verification codes.
+- Login uses email or Telegram verification codes.
 - No passwords.
 - Verification code expiry: 5 minutes.
 - Session timeout: 5 minutes.
