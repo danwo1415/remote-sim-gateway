@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { config } from "./config.js";
 
 type SmsPayload = {
   from?: unknown;
@@ -24,10 +25,31 @@ let transporter: nodemailer.Transporter | null = null;
 let transporterKey: string | null = null;
 let warnedMissingConfig = false;
 
-export async function forwardIncomingSmsEmail(deviceId: string, payload: SmsPayload): Promise<boolean> {
+export async function sendLoginCodeEmail(email: string, code: string): Promise<void> {
   const config = getMailConfig();
 
   if (!config) {
+    throw new Error("SMTP is not configured");
+  }
+
+  await sendMail({
+    to: email,
+    subject: "[Remote SIM Gateway] Login code",
+    text: [
+      "Your Remote SIM Gateway login code is:",
+      "",
+      code,
+      "",
+      "This code expires in 5 minutes."
+    ].join("\n")
+  });
+}
+
+export async function forwardIncomingSmsEmail(deviceId: string, payload: SmsPayload): Promise<boolean> {
+  const mailConfig = getMailConfig();
+  const to = config.smsForward.to;
+
+  if (!mailConfig || !to) {
     if (!warnedMissingConfig) {
       console.warn("[mail] SMS email forwarding disabled. Configure SMTP_HOST and SMS_FORWARD_TO.");
       warnedMissingConfig = true;
@@ -39,7 +61,7 @@ export async function forwardIncomingSmsEmail(deviceId: string, payload: SmsPayl
   const body = stringify(payload.body, "");
   const receivedAt = formatTimestamp(payload.timestamp);
   const queuedAt = payload.queuedAt ? formatTimestamp(payload.queuedAt) : null;
-  const subject = `${config.subjectPrefix} SMS from ${fromNumber}`.slice(0, 160);
+  const subject = `${config.smsForward.subjectPrefix} SMS from ${fromNumber}`.slice(0, 160);
 
   const lines = [
     "Remote SIM Gateway received a new SMS.",
@@ -53,9 +75,9 @@ export async function forwardIncomingSmsEmail(deviceId: string, payload: SmsPayl
     body
   ].filter((line): line is string => line !== null);
 
-  await getTransporter(config).sendMail({
-    from: config.from,
-    to: config.to,
+  await getTransporter(mailConfig).sendMail({
+    from: config.smsForward.from || mailConfig.from,
+    to,
     subject,
     text: lines.join("\n")
   });
@@ -63,27 +85,36 @@ export async function forwardIncomingSmsEmail(deviceId: string, payload: SmsPayl
   return true;
 }
 
-function getMailConfig(): MailConfig | null {
-  const host = process.env.SMTP_HOST?.trim();
-  const to = process.env.SMS_FORWARD_TO?.trim();
+async function sendMail(message: { to: string; subject: string; text: string }): Promise<void> {
+  const mailConfig = getMailConfig();
+  if (!mailConfig) {
+    throw new Error("SMTP is not configured");
+  }
 
-  if (!host || !to) {
+  await getTransporter(mailConfig).sendMail({
+    from: mailConfig.from,
+    ...message
+  });
+}
+
+function getMailConfig(): MailConfig | null {
+  const host = config.smtp.host;
+
+  if (!host) {
     return null;
   }
 
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const secure = parseBoolean(process.env.SMTP_SECURE) ?? port === 465;
+  const user = config.smtp.user;
+  const pass = config.smtp.pass;
 
   return {
     host,
-    port: Number.isFinite(port) ? port : 587,
-    secure,
+    port: config.smtp.port,
+    secure: config.smtp.secure,
     auth: user && pass ? { user, pass } : undefined,
-    from: process.env.SMS_FORWARD_FROM?.trim() || user || "Remote SIM Gateway <no-reply@localhost>",
-    to,
-    subjectPrefix: process.env.SMS_FORWARD_SUBJECT_PREFIX?.trim() || "[Remote SIM Gateway]"
+    from: config.smtp.from || user || "Remote SIM Gateway <no-reply@localhost>",
+    to: config.smsForward.to,
+    subjectPrefix: config.smsForward.subjectPrefix
   };
 }
 
@@ -140,21 +171,4 @@ function toIsoString(date: Date): string {
   }
 
   return date.toISOString();
-}
-
-function parseBoolean(value: string | undefined): boolean | null {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "y"].includes(normalized)) {
-    return true;
-  }
-
-  if (["0", "false", "no", "n"].includes(normalized)) {
-    return false;
-  }
-
-  return null;
 }

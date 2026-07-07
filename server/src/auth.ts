@@ -1,3 +1,5 @@
+import "./config.js";
+
 export function isDeviceAllowed(deviceId: string | undefined, deviceKey: string | undefined): boolean {
   const expectedDeviceId = process.env.DEVICE_ID;
   const expectedDeviceKey = process.env.DEVICE_KEY;

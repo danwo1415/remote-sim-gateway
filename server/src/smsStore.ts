@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { db } from "./db.js";
 
 type SmsPayload = {
   from?: unknown;
@@ -18,6 +15,7 @@ type SmsRow = {
   phone_timestamp: number | null;
   received_at: string;
   queued_at: string | null;
+  read_at: string | null;
   created_at: string;
 };
 
@@ -29,18 +27,11 @@ export type StoredSmsMessage = {
   timestamp: number | null;
   receivedAt: string;
   queuedAt: string | null;
+  readAt: string | null;
+  unread: boolean;
   createdAt: string;
 };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const defaultDataDir = path.resolve(__dirname, "../data");
-const dbPath = process.env.SQLITE_PATH || path.join(defaultDataDir, "remote-sim-gateway.sqlite");
-
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-
-const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
 db.exec(`
   CREATE TABLE IF NOT EXISTS sms_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +41,7 @@ db.exec(`
     phone_timestamp INTEGER,
     received_at TEXT NOT NULL,
     queued_at TEXT,
+    read_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -60,6 +52,8 @@ db.exec(`
     ON sms_messages(device_id);
 `);
 
+ensureColumn("sms_messages", "read_at", "TEXT");
+
 const insertSmsStatement = db.prepare(`
   INSERT INTO sms_messages (
     device_id,
@@ -68,6 +62,7 @@ const insertSmsStatement = db.prepare(`
     phone_timestamp,
     received_at,
     queued_at,
+    read_at,
     created_at
   )
   VALUES (
@@ -77,6 +72,7 @@ const insertSmsStatement = db.prepare(`
     @phoneTimestamp,
     @receivedAt,
     @queuedAt,
+    NULL,
     @createdAt
   )
 `);
@@ -90,6 +86,7 @@ const listSmsStatement = db.prepare(`
     phone_timestamp,
     received_at,
     queued_at,
+    read_at,
     created_at
   FROM sms_messages
   ORDER BY received_at DESC, id DESC
@@ -105,9 +102,22 @@ const getSmsStatement = db.prepare(`
     phone_timestamp,
     received_at,
     queued_at,
+    read_at,
     created_at
   FROM sms_messages
   WHERE id = @id
+`);
+
+const unreadCountStatement = db.prepare(`
+  SELECT COUNT(*) AS count
+  FROM sms_messages
+  WHERE read_at IS NULL
+`);
+
+const markAllReadStatement = db.prepare(`
+  UPDATE sms_messages
+  SET read_at = @readAt
+  WHERE read_at IS NULL
 `);
 
 export function saveIncomingSms(deviceId: string, payload: SmsPayload): StoredSmsMessage {
@@ -141,6 +151,16 @@ export function listSmsMessages(limit = 100): StoredSmsMessage[] {
   return rows.map(mapSmsRow);
 }
 
+export function getUnreadSmsCount(): number {
+  const row = unreadCountStatement.get() as { count: number };
+  return row.count;
+}
+
+export function markAllSmsRead(): number {
+  const result = markAllReadStatement.run({ readAt: new Date().toISOString() });
+  return result.changes;
+}
+
 export function parseSmsLimit(value: unknown): number {
   if (typeof value !== "string") {
     return 100;
@@ -163,8 +183,19 @@ function mapSmsRow(row: SmsRow): StoredSmsMessage {
     timestamp: row.phone_timestamp,
     receivedAt: row.received_at,
     queuedAt: row.queued_at,
+    readAt: row.read_at,
+    unread: row.read_at === null,
     createdAt: row.created_at
   };
+}
+
+function ensureColumn(tableName: string, columnName: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 function stringify(value: unknown, fallback: string): string {

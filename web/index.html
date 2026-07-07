@@ -72,7 +72,10 @@
       min-height: 170px;
       box-shadow: var(--shadow);
       position: relative;
+      cursor: default;
     }
+    .module-card.action { cursor: pointer; }
+    .module-card.action:hover { border-color: var(--primary); }
     .module-icon {
       width: 46px;
       height: 46px;
@@ -105,7 +108,7 @@
     .card { padding: 18px 20px; margin-bottom: 18px; }
     .status-line { line-height: 1.8; font-size: 14px; }
     .muted { color: var(--muted); }
-    .sms-panel { margin-top: 18px; }
+    .hidden { display: none !important; }
     .section-head {
       display: flex;
       justify-content: space-between;
@@ -114,7 +117,7 @@
       margin-bottom: 12px;
     }
     .section-title { font-size: 18px; font-weight: 760; }
-    .refresh-button {
+    .button {
       border: 1px solid var(--border);
       background: #fff;
       color: var(--text);
@@ -123,7 +126,27 @@
       cursor: pointer;
       font: inherit;
     }
-    .refresh-button:hover { border-color: var(--primary); color: var(--primary); }
+    .button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+    .button:hover { border-color: var(--primary); color: var(--primary); }
+    .button.primary:hover { color: #fff; }
+    .form-grid { display: grid; gap: 12px; }
+    .field { display: grid; gap: 6px; }
+    .field label { color: var(--muted); font-size: 13px; }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
     .sms-list { display: grid; gap: 10px; }
     .sms-item {
       border: 1px solid var(--border);
@@ -131,6 +154,7 @@
       padding: 12px;
       background: #fff;
     }
+    .sms-item.unread { border-color: var(--primary); }
     .sms-meta {
       display: flex;
       justify-content: space-between;
@@ -142,7 +166,9 @@
     }
     .sms-from { color: var(--text); font-weight: 700; }
     .sms-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; font-size: 14px; }
-    .sms-empty { color: var(--muted); padding: 12px 0; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    .error { color: var(--danger); }
+    .success { color: var(--success); }
     @media (max-width: 520px) and (orientation: portrait) {
       .app { padding: 14px 12px 28px; }
       .topbar { align-items: flex-start; flex-direction: column; padding: 15px; margin-bottom: 14px; }
@@ -163,84 +189,256 @@
       .module-desc { font-size: 12px; }
       .badge { top: 14px; right: 14px; }
       .section-head { align-items: flex-start; flex-direction: column; }
-      .refresh-button { width: 100%; }
+      .button { width: 100%; }
     }
   </style>
 </head>
 <body>
   <main class="app">
-    <section class="topbar">
-      <div>
-        <div class="title">Remote SIM Gateway</div>
-        <div class="subtitle">极简网页控制台 · SIM 插在 Android 手机上</div>
-      </div>
-      <div class="status-row">
-        <div class="pill"><span id="deviceDot" class="dot"></span><span id="deviceText">Device Offline</span></div>
-        <div class="pill">SIM Gateway</div>
-        <div class="pill">M1 Device Online</div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="status-line"><strong>Device ID：</strong><span id="deviceId" class="muted">-</span></div>
-      <div class="status-line"><strong>Connected At：</strong><span id="connectedAt" class="muted">-</span></div>
-      <div class="status-line"><strong>Last Seen：</strong><span id="lastSeenAt" class="muted">-</span></div>
-    </section>
-
-    <section class="grid">
-      <div class="module-card">
-        <div id="smsCount" class="badge sms">0</div>
-        <div class="module-icon">✉️</div>
-        <div>
-          <div class="module-title">接收短信</div>
-          <div id="smsSummary" class="module-desc">正在读取短信</div>
-        </div>
-      </div>
-
-      <div class="module-card">
-        <div class="module-icon">➤</div>
-        <div>
-          <div class="module-title">发送短信</div>
-          <div class="module-desc">M3 开始接入发送指令</div>
-        </div>
-      </div>
-
-      <div class="module-card">
-        <div class="badge">0</div>
-        <div class="module-icon">☎️</div>
-        <div>
-          <div class="module-title">接听电话</div>
-          <div class="module-desc">M4 开始接入来电状态</div>
-        </div>
-      </div>
-
-      <div class="module-card">
-        <div class="module-icon">⌕</div>
-        <div>
-          <div class="module-title">拨打电话</div>
-          <div class="module-desc">M5 开始接入拨号指令</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card sms-panel">
+    <section id="loginPanel" class="card hidden">
       <div class="section-head">
         <div>
-          <div class="section-title">接收短信</div>
-          <div id="smsListStatus" class="muted">正在读取短信</div>
+          <div class="section-title">登录</div>
+          <div class="muted">使用邮箱验证码进入 Remote SIM Gateway</div>
         </div>
-        <button id="refreshSmsButton" class="refresh-button" type="button">刷新</button>
       </div>
-      <div id="smsList" class="sms-list"></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="loginEmail">邮箱</label>
+          <input id="loginEmail" type="email" autocomplete="email" placeholder="name@example.com" />
+        </div>
+        <div class="actions">
+          <button id="requestCodeButton" class="button" type="button">获取验证码</button>
+        </div>
+        <div class="field">
+          <label for="loginCode">验证码</label>
+          <input id="loginCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" />
+        </div>
+        <div class="actions">
+          <button id="loginButton" class="button primary" type="button">登录</button>
+        </div>
+        <div id="loginStatus" class="muted"></div>
+      </div>
+    </section>
+
+    <section id="mainApp" class="hidden">
+      <section class="topbar">
+        <div>
+          <div class="title">Remote SIM Gateway</div>
+          <div class="subtitle">远程通信平台 · SIM / eSIM Profile 通信能力管理</div>
+        </div>
+        <div class="status-row">
+          <div class="pill"><span id="deviceDot" class="dot"></span><span id="deviceText">Device Offline</span></div>
+          <div class="pill">SIM Gateway</div>
+          <div class="pill"><span id="sessionEmail">-</span></div>
+          <button id="logoutButton" class="button" type="button">登出</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="status-line"><strong>Device ID：</strong><span id="deviceId" class="muted">-</span></div>
+        <div class="status-line"><strong>Connected At：</strong><span id="connectedAt" class="muted">-</span></div>
+        <div class="status-line"><strong>Last Seen：</strong><span id="lastSeenAt" class="muted">-</span></div>
+      </section>
+
+      <section class="grid">
+        <div id="receiveSmsModule" class="module-card action" role="button" tabindex="0">
+          <div id="smsCount" class="badge sms">0</div>
+          <div class="module-icon">✉</div>
+          <div>
+            <div class="module-title">接收短信</div>
+            <div id="smsSummary" class="module-desc">正在读取短信</div>
+          </div>
+        </div>
+
+        <div id="sendSmsModule" class="module-card action" role="button" tabindex="0">
+          <div class="module-icon">➤</div>
+          <div>
+            <div class="module-title">发送短信</div>
+            <div class="module-desc">通过 Android Gateway 发送</div>
+          </div>
+        </div>
+
+        <div class="module-card">
+          <div class="badge">0</div>
+          <div class="module-icon">☎</div>
+          <div>
+            <div class="module-title">接听电话</div>
+            <div class="module-desc">后续接入来电状态</div>
+          </div>
+        </div>
+
+        <div class="module-card">
+          <div class="module-icon">⌕</div>
+          <div>
+            <div class="module-title">拨打电话</div>
+            <div class="module-desc">后续接入拨号指令</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="smsPanel" class="card">
+        <div class="section-head">
+          <div>
+            <div class="section-title">接收短信</div>
+            <div id="smsListStatus" class="muted">正在读取短信</div>
+          </div>
+          <button id="refreshSmsButton" class="button" type="button">刷新</button>
+        </div>
+        <div id="smsList" class="sms-list"></div>
+      </section>
+
+      <section id="sendPanel" class="card">
+        <div class="section-head">
+          <div>
+            <div class="section-title">发送短信</div>
+            <div class="muted">Server 校验权限和限频，Android Gateway 执行发送</div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="smsToInput">号码</label>
+            <input id="smsToInput" type="tel" autocomplete="tel" placeholder="+1234567890" />
+          </div>
+          <div class="field">
+            <label for="smsTextInput">短信内容</label>
+            <textarea id="smsTextInput" placeholder="输入短信内容"></textarea>
+          </div>
+          <div class="actions">
+            <button id="sendSmsButton" class="button primary" type="button">发送</button>
+          </div>
+          <div id="sendSmsStatus" class="muted"></div>
+        </div>
+      </section>
     </section>
   </main>
 
   <script>
-    async function refreshDeviceStatus() {
-      try {
-        const res = await fetch('/api/device/status', { cache: 'no-store' });
-        const data = await res.json();
+    const baseTitle = 'Remote SIM Gateway';
+    let authenticated = false;
+    let lastUnreadCount = null;
+    let smsPollTimer = null;
+    let devicePollTimer = null;
 
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.headers || {})
+        },
+        ...options
+      });
+
+      if (!res.ok) {
+        const data = await safeJson(res);
+        const error = new Error(data.error || `HTTP ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
+
+      return safeJson(res);
+    }
+
+    async function safeJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
+
+    async function checkSession() {
+      try {
+        const data = await api('/api/auth/session');
+        setAuthenticated(data.email);
+      } catch {
+        setLoggedOut();
+      }
+    }
+
+    function setAuthenticated(email) {
+      authenticated = true;
+      document.getElementById('loginPanel').classList.add('hidden');
+      document.getElementById('mainApp').classList.remove('hidden');
+      document.getElementById('sessionEmail').textContent = email || '-';
+      requestNotificationPermission();
+      refreshDeviceStatus();
+      refreshSmsMessages();
+      devicePollTimer = setInterval(refreshDeviceStatus, 3000);
+      smsPollTimer = setInterval(refreshSmsMessages, 5000);
+    }
+
+    function setLoggedOut() {
+      authenticated = false;
+      document.getElementById('mainApp').classList.add('hidden');
+      document.getElementById('loginPanel').classList.remove('hidden');
+      clearInterval(devicePollTimer);
+      clearInterval(smsPollTimer);
+      updateUnreadIndicators(0);
+    }
+
+    async function requestCode() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const status = document.getElementById('loginStatus');
+      status.className = 'muted';
+      status.textContent = '正在发送验证码';
+
+      try {
+        await api('/api/auth/request-code', {
+          method: 'POST',
+          body: JSON.stringify({ email })
+        });
+        status.className = 'success';
+        status.textContent = '验证码已发送';
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = authErrorText(error);
+      }
+    }
+
+    async function login() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const code = document.getElementById('loginCode').value.trim();
+      const status = document.getElementById('loginStatus');
+      status.className = 'muted';
+      status.textContent = '正在登录';
+
+      try {
+        const data = await api('/api/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, code })
+        });
+        status.textContent = '';
+        setAuthenticated(data.email);
+      } catch (error) {
+        status.className = 'error';
+        status.textContent = authErrorText(error);
+      }
+    }
+
+    async function logout() {
+      try {
+        await api('/api/auth/logout', { method: 'POST', body: '{}' });
+      } finally {
+        setLoggedOut();
+      }
+    }
+
+    function authErrorText(error) {
+      if (error.message === 'email_not_allowed') return '邮箱不在允许列表';
+      if (error.message === 'smtp_not_available') return 'SMTP 未配置或不可用';
+      if (error.message === 'invalid_code') return '验证码错误或已过期';
+      if (error.message === 'too_many_attempts') return '尝试次数过多';
+      if (error.message === 'login_not_configured') return '登录邮箱未配置';
+      return '操作失败';
+    }
+
+    async function refreshDeviceStatus() {
+      if (!authenticated) return;
+
+      try {
+        const data = await api('/api/device/status');
         const online = Boolean(data.online);
         document.getElementById('deviceDot').classList.toggle('online', online);
         document.getElementById('deviceText').textContent = online ? 'Device Online' : 'Device Offline';
@@ -248,31 +446,39 @@
         document.getElementById('connectedAt').textContent = data.connectedAt || '-';
         document.getElementById('lastSeenAt').textContent = data.lastSeenAt || '-';
       } catch (error) {
+        if (error.status === 401) {
+          setLoggedOut();
+          return;
+        }
+
         document.getElementById('deviceDot').classList.remove('online');
         document.getElementById('deviceText').textContent = 'Server Offline';
       }
     }
 
     async function refreshSmsMessages() {
-      const smsCount = document.getElementById('smsCount');
+      if (!authenticated) return;
+
       const smsSummary = document.getElementById('smsSummary');
       const smsListStatus = document.getElementById('smsListStatus');
       const smsList = document.getElementById('smsList');
 
       try {
-        const res = await fetch('/api/sms?limit=50', { cache: 'no-store' });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-
-        const data = await res.json();
+        const data = await api('/api/sms?limit=50');
         const messages = Array.isArray(data.messages) ? data.messages : [];
+        const unreadCount = Number(data.unreadCount || 0);
 
-        smsCount.textContent = String(data.count ?? messages.length);
         smsSummary.textContent = messages.length ? `${messages.length} 条短信` : '暂无短信';
         smsListStatus.textContent = messages.length ? `最近 ${messages.length} 条` : '暂无短信';
         renderSmsMessages(messages);
+        maybeNotifyNewSms(unreadCount);
+        updateUnreadIndicators(unreadCount);
       } catch (error) {
+        if (error.status === 401) {
+          setLoggedOut();
+          return;
+        }
+
         smsSummary.textContent = '读取失败';
         smsListStatus.textContent = '短信读取失败';
         smsList.replaceChildren();
@@ -285,7 +491,7 @@
 
       if (messages.length === 0) {
         const empty = document.createElement('div');
-        empty.className = 'sms-empty';
+        empty.className = 'empty';
         empty.textContent = '暂无短信';
         smsList.appendChild(empty);
         return;
@@ -293,7 +499,7 @@
 
       for (const message of messages) {
         const item = document.createElement('article');
-        item.className = 'sms-item';
+        item.className = message.unread ? 'sms-item unread' : 'sms-item';
 
         const meta = document.createElement('div');
         meta.className = 'sms-meta';
@@ -315,6 +521,120 @@
       }
     }
 
+    async function markSmsRead() {
+      try {
+        const data = await api('/api/sms/mark-read', { method: 'POST', body: '{}' });
+        updateUnreadIndicators(Number(data.unreadCount || 0));
+        await refreshSmsMessages();
+      } catch (error) {
+        if (error.status === 401) setLoggedOut();
+      }
+    }
+
+    async function sendSms() {
+      const to = document.getElementById('smsToInput').value.trim();
+      const text = document.getElementById('smsTextInput').value.trim();
+      const status = document.getElementById('sendSmsStatus');
+
+      status.className = 'muted';
+      status.textContent = '正在提交发送';
+
+      try {
+        await api('/api/sms/send', {
+          method: 'POST',
+          body: JSON.stringify({ to, text })
+        });
+        status.className = 'success';
+        status.textContent = '已提交给 Android Gateway';
+        document.getElementById('smsTextInput').value = '';
+      } catch (error) {
+        status.className = 'error';
+        if (error.message === 'device_offline' || error.message === 'device_socket_unavailable') {
+          status.textContent = 'Android Gateway 离线';
+        } else if (error.message === 'sms_send_rate_limited') {
+          status.textContent = '发送过于频繁，请稍后再试';
+        } else if (error.message === 'to_and_text_required') {
+          status.textContent = '号码和内容不能为空';
+        } else {
+          status.textContent = '发送失败';
+        }
+      }
+    }
+
+    function maybeNotifyNewSms(unreadCount) {
+      if (lastUnreadCount !== null && unreadCount > lastUnreadCount && document.hidden) {
+        showSmsNotification(unreadCount);
+      }
+
+      lastUnreadCount = unreadCount;
+    }
+
+    function updateUnreadIndicators(unreadCount) {
+      document.getElementById('smsCount').textContent = String(unreadCount);
+      document.title = unreadCount > 0 ? `(${unreadCount}) ${baseTitle}` : baseTitle;
+      updateAppBadge(unreadCount);
+      updateFaviconBadge(unreadCount);
+    }
+
+    async function updateAppBadge(unreadCount) {
+      try {
+        if ('setAppBadge' in navigator && unreadCount > 0) {
+          await navigator.setAppBadge(unreadCount);
+        } else if ('clearAppBadge' in navigator) {
+          await navigator.clearAppBadge();
+        }
+      } catch {
+      }
+    }
+
+    function updateFaviconBadge(unreadCount) {
+      const oldIcon = document.querySelector('link[rel="icon"]');
+      if (oldIcon) oldIcon.remove();
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#2563eb';
+      ctx.fillRect(0, 0, 32, 32);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 18px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('R', 16, 16);
+
+      if (unreadCount > 0) {
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.arc(24, 8, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px Arial';
+        ctx.fillText(unreadCount > 9 ? '9+' : String(unreadCount), 24, 8);
+      }
+
+      const icon = document.createElement('link');
+      icon.rel = 'icon';
+      icon.href = canvas.toDataURL('image/png');
+      document.head.appendChild(icon);
+    }
+
+    function requestNotificationPermission() {
+      if ('Notification' in window && Notification.permission === 'default') {
+        void Notification.requestPermission();
+      }
+    }
+
+    function showSmsNotification(unreadCount) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') {
+        return;
+      }
+
+      new Notification('Remote SIM Gateway', {
+        body: `收到 ${unreadCount} 条未读短信`
+      });
+    }
+
     function formatSmsTime(value) {
       if (!value) return '-';
 
@@ -324,11 +644,31 @@
       return date.toLocaleString('zh-CN', { hour12: false });
     }
 
-    refreshDeviceStatus();
-    refreshSmsMessages();
+    function wireModuleAction(id, callback) {
+      const element = document.getElementById(id);
+      element.addEventListener('click', callback);
+      element.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          callback();
+        }
+      });
+    }
+
+    document.getElementById('requestCodeButton').addEventListener('click', requestCode);
+    document.getElementById('loginButton').addEventListener('click', login);
+    document.getElementById('logoutButton').addEventListener('click', logout);
     document.getElementById('refreshSmsButton').addEventListener('click', refreshSmsMessages);
-    setInterval(refreshDeviceStatus, 3000);
-    setInterval(refreshSmsMessages, 5000);
+    document.getElementById('sendSmsButton').addEventListener('click', sendSms);
+    wireModuleAction('receiveSmsModule', () => {
+      document.getElementById('smsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      void markSmsRead();
+    });
+    wireModuleAction('sendSmsModule', () => {
+      document.getElementById('sendPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    checkSession();
   </script>
 </body>
 </html>

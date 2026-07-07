@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS sms_messages (
   phone_timestamp INTEGER,
   received_at TEXT NOT NULL,
   queued_at TEXT,
+  read_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
@@ -43,6 +44,7 @@ Response:
 ```json
 {
   "count": 1,
+  "unreadCount": 1,
   "messages": [
     {
       "id": 1,
@@ -52,6 +54,8 @@ Response:
       "timestamp": 1783334856359,
       "receivedAt": "2026-07-06T10:47:36.359Z",
       "queuedAt": null,
+      "readAt": null,
+      "unread": true,
       "createdAt": "2026-07-06T10:47:36.500Z"
     }
   ]
