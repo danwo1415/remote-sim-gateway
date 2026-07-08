@@ -38,6 +38,15 @@ class GatewayWebSocketClient(
     private var isConnecting = false
     private var isConnected = false
 
+    private val simProfileRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (isConnected) {
+                sendSimProfiles()
+                mainHandler.postDelayed(this, SIM_PROFILE_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
     private val reconnectRunnable = Runnable {
         reconnectScheduled = false
         if (shouldReconnect && !isConnected) {
@@ -73,6 +82,7 @@ class GatewayWebSocketClient(
                     updateStatus("Connected\n$serverUrl")
                     sendEvent("device_online", JSONObject().put("deviceId", deviceId))
                     sendSimProfiles()
+                    scheduleSimProfileRefresh()
                     flushQueuedSms()
                 }
 
@@ -97,6 +107,7 @@ class GatewayWebSocketClient(
                     isConnecting = false
                     isConnected = false
                     webSocket = null
+                    stopSimProfileRefresh()
                     Log.e("GatewayWS", errorText, t)
                     updateStatus(errorText)
                     scheduleReconnect()
@@ -106,6 +117,7 @@ class GatewayWebSocketClient(
                     isConnecting = false
                     isConnected = false
                     webSocket = null
+                    stopSimProfileRefresh()
                     val text = "Closed\nCode: $code\nReason: $reason"
                     Log.i("GatewayWS", text)
                     updateStatus(text)
@@ -136,6 +148,7 @@ class GatewayWebSocketClient(
         isConnected = false
         reconnectScheduled = false
         mainHandler.removeCallbacks(reconnectRunnable)
+        stopSimProfileRefresh()
         updateStatus("Closing WebSocket")
         webSocket?.close(1000, "Service stopped")
         webSocket = null
@@ -286,6 +299,15 @@ class GatewayWebSocketClient(
         sendEvent("sim_profiles", SimProfileReporter.buildPayload(context, deviceId))
     }
 
+    private fun scheduleSimProfileRefresh() {
+        stopSimProfileRefresh()
+        mainHandler.postDelayed(simProfileRefreshRunnable, SIM_PROFILE_REFRESH_INTERVAL_MS)
+    }
+
+    private fun stopSimProfileRefresh() {
+        mainHandler.removeCallbacks(simProfileRefreshRunnable)
+    }
+
     private fun JSONObject.optionalInt(name: String): Int? {
         if (!has(name) || isNull(name)) {
             return null
@@ -297,5 +319,9 @@ class GatewayWebSocketClient(
             is String -> value.toIntOrNull()
             else -> null
         }
+    }
+
+    companion object {
+        private const val SIM_PROFILE_REFRESH_INTERVAL_MS = 60_000L
     }
 }

@@ -3,8 +3,10 @@ package com.example.remotesimgateway.sim
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.telephony.ServiceState
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,6 +28,8 @@ object SimProfileReporter {
         val defaultVoiceSubscriptionId = SubscriptionManager.getDefaultVoiceSubscriptionId()
 
         for (subscription in subscriptions) {
+            val signal = signalState(context, subscription.subscriptionId)
+
             profiles.put(
                 JSONObject()
                     .put("profileId", buildProfileId(deviceId, subscription.subscriptionId))
@@ -39,6 +43,8 @@ object SimProfileReporter {
                     .put("isEnabled", true)
                     .put("isDefaultSms", subscription.subscriptionId == defaultSmsSubscriptionId)
                     .put("isDefaultVoice", subscription.subscriptionId == defaultVoiceSubscriptionId)
+                    .put("hasSignal", signal.hasSignal)
+                    .put("signalState", signal.state)
                     .put("lastSeen", System.currentTimeMillis())
             )
         }
@@ -64,6 +70,18 @@ object SimProfileReporter {
         return activeSubscriptions(context).any { it.subscriptionId == subscriptionId }
     }
 
+    fun carrierNameForSubscription(context: Context, subscriptionId: Int?): String {
+        if (subscriptionId == null || !hasPhoneStatePermission(context)) {
+            return ""
+        }
+
+        return activeSubscriptions(context)
+            .firstOrNull { it.subscriptionId == subscriptionId }
+            ?.carrierName
+            ?.toString()
+            .orEmpty()
+    }
+
     private fun activeSubscriptions(context: Context): List<SubscriptionInfo> {
         val manager = context.getSystemService(SubscriptionManager::class.java)
 
@@ -79,6 +97,25 @@ object SimProfileReporter {
             context,
             Manifest.permission.READ_PHONE_STATE
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun signalState(context: Context, subscriptionId: Int): SignalState {
+        val telephonyManager = context.getSystemService(TelephonyManager::class.java)
+            .createForSubscriptionId(subscriptionId)
+
+        val state = try {
+            telephonyManager.serviceState?.state
+        } catch (error: SecurityException) {
+            null
+        }
+
+        return when (state) {
+            ServiceState.STATE_IN_SERVICE -> SignalState(true, "in_service")
+            ServiceState.STATE_OUT_OF_SERVICE -> SignalState(false, "out_of_service")
+            ServiceState.STATE_EMERGENCY_ONLY -> SignalState(false, "emergency_only")
+            ServiceState.STATE_POWER_OFF -> SignalState(false, "power_off")
+            else -> SignalState(false, "unknown")
+        }
     }
 
     private fun buildProfileId(deviceId: String, subscriptionId: Int): String {
@@ -114,4 +151,9 @@ object SimProfileReporter {
             ""
         }
     }
+
+    private data class SignalState(
+        val hasSignal: Boolean,
+        val state: String
+    )
 }

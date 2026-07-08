@@ -195,13 +195,16 @@ Telegram supports SMS sending only. It must not implement call answer, call dial
 Supported commands:
 
 ```text
+/profiles
 /send +13022985056 火鸡
+/send --profile default +13022985056 火鸡
+/send --profile <profileId> +13022985056 火鸡
 ```
 
 or:
 
 ```text
-/send +13022985056
+/send --profile <profileId> +13022985056
 火鸡
 ```
 
@@ -213,7 +216,9 @@ Rules:
 - It writes audit logs.
 - It does not require a Web Session.
 - It sends through the current online Android `/ws/device`.
-- It uses the Android system default SMS SIM for now.
+- A bare `/send +number text` stores a pending SMS and asks the Telegram user to choose a SIM/Profile.
+- `/send --profile default ...` sends through the Android system default SMS SIM.
+- `/send --profile <profileId> ...` sends through the selected Android subscription when available.
 
 Telegram replies:
 
@@ -223,6 +228,71 @@ Telegram replies:
 ❌ 格式错误，请使用：
 /send +13022985056 短信内容
 ```
+
+`/profiles` returns the current enabled Profiles:
+
+```text
+Available Profiles:
+
+1. default - 默认 SIM
+   carrierName: -
+   isEnabled: true
+   isDefaultSms: true
+2. device-id:subscription:1 - Vodafone Egypt
+   carrierName: Vodafone Egypt
+   isEnabled: true
+   isDefaultSms: false
+```
+
+## Telegram Call Notifications
+
+Telegram call support is notification-only. Do not implement Telegram answer, reject, dial, or hangup commands.
+
+Android reports incoming call state through `/ws/device`:
+
+```text
+incoming_call
+call_answered
+call_ended
+```
+
+Server stores call records in SQLite `call_logs` and forwards notifications to Telegram when configured.
+
+Incoming call message:
+
+```text
+☎️ Incoming Call
+
+From: +8613812345678
+Time: 2026-07-07 12:30:20
+SIM: Vodafone Egypt
+```
+
+Call result:
+
+```text
+☎️ Call Result
+
+From: +8613812345678
+Incoming Time: 2026-07-07 12:30:20
+Answered Time: 2026-07-07 12:30:35
+Status: Answered
+Ring Duration: 15s
+```
+
+Missed call:
+
+```text
+☎️ Missed Call
+
+From: +8613812345678
+Incoming Time: 2026-07-07 12:30:20
+Answered Time: -
+Status: Missed
+Ring Duration: 28s
+```
+
+Telegram notification failures are written to audit/server logs and must not block SQLite saving.
 
 Configure the Telegram webhook after deployment:
 

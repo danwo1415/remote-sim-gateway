@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import type { StoredCallLog } from "./callStore.js";
 import type { StoredSmsMessage } from "./smsStore.js";
 
 export async function sendLoginCodeTelegram(code: string): Promise<void> {
@@ -22,9 +23,44 @@ export async function forwardIncomingSmsTelegram(message: StoredSmsMessage): Pro
 
   await sendTelegramMessage([
     `From: ${message.from || "unknown"}`,
-    `Time: ${formatSmsTime(message.receivedAt || message.timestamp)}`,
+    `Time: ${formatTelegramTime(message.receivedAt || message.timestamp)}`,
     "",
     message.body || ""
+  ].join("\n"));
+
+  return true;
+}
+
+export async function forwardIncomingCallTelegram(call: StoredCallLog): Promise<boolean> {
+  if (!config.telegram.botToken || !config.telegram.chatId) {
+    return false;
+  }
+
+  await sendTelegramMessage([
+    "☎️ Incoming Call",
+    "",
+    `From: ${call.phoneNumber}`,
+    `Time: ${formatTelegramTime(call.startedAt)}`,
+    `SIM: ${call.carrierName || call.subscriptionId || "Unknown"}`
+  ].join("\n"));
+
+  return true;
+}
+
+export async function forwardCallResultTelegram(call: StoredCallLog): Promise<boolean> {
+  if (!config.telegram.botToken || !config.telegram.chatId) {
+    return false;
+  }
+
+  const answered = call.status === "answered";
+  await sendTelegramMessage([
+    answered ? "☎️ Call Result" : "☎️ Missed Call",
+    "",
+    `From: ${call.phoneNumber}`,
+    `Incoming Time: ${formatTelegramTime(call.startedAt)}`,
+    `Answered Time: ${call.answeredAt ? formatTelegramTime(call.answeredAt) : "-"}`,
+    `Status: ${answered ? "Answered" : "Missed"}`,
+    `Ring Duration: ${call.ringDurationSeconds ?? 0}s`
   ].join("\n"));
 
   return true;
@@ -57,7 +93,7 @@ export async function sendTelegramMessage(text: string): Promise<void> {
   }
 }
 
-function formatSmsTime(value: string | number | null): string {
+export function formatTelegramTime(value: string | number | null): string {
   const date = value ? new Date(value) : new Date();
   const validDate = Number.isNaN(date.getTime()) ? new Date() : date;
 

@@ -16,6 +16,8 @@ type SimProfileRow = {
   is_enabled: number;
   is_default_sms: number;
   is_default_voice: number;
+  has_signal: number | null;
+  signal_state: string | null;
   last_seen: string | null;
   created_at: string;
   updated_at: string;
@@ -34,6 +36,8 @@ export type SimProfile = {
   isEnabled: boolean;
   isDefaultSms: boolean;
   isDefaultVoice: boolean;
+  hasSignal: boolean | null;
+  signalState: string | null;
   lastSeen: string | null;
   createdAt: string;
   updatedAt: string;
@@ -60,6 +64,8 @@ db.exec(`
     is_enabled INTEGER NOT NULL DEFAULT 1,
     is_default_sms INTEGER NOT NULL DEFAULT 0,
     is_default_voice INTEGER NOT NULL DEFAULT 0,
+    has_signal INTEGER,
+    signal_state TEXT,
     last_seen TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -77,6 +83,8 @@ db.exec(`
 
 ensureColumn("sim_profiles", "device_id", "TEXT");
 ensureColumn("sim_profiles", "slot_index", "INTEGER");
+ensureColumn("sim_profiles", "has_signal", "INTEGER");
+ensureColumn("sim_profiles", "signal_state", "TEXT");
 ensureColumn("sim_profiles", "created_at", "TEXT");
 ensureColumn("sim_profiles", "updated_at", "TEXT");
 
@@ -102,6 +110,8 @@ const listProfilesStatement = db.prepare(`
     is_enabled,
     is_default_sms,
     is_default_voice,
+    has_signal,
+    signal_state,
     last_seen,
     created_at,
     updated_at
@@ -123,6 +133,8 @@ const listEnabledProfilesStatement = db.prepare(`
     is_enabled,
     is_default_sms,
     is_default_voice,
+    has_signal,
+    signal_state,
     last_seen,
     created_at,
     updated_at
@@ -145,6 +157,8 @@ const getProfileStatement = db.prepare(`
     is_enabled,
     is_default_sms,
     is_default_voice,
+    has_signal,
+    signal_state,
     last_seen,
     created_at,
     updated_at
@@ -166,6 +180,8 @@ const listProfilesByDeviceStatement = db.prepare(`
     is_enabled,
     is_default_sms,
     is_default_voice,
+    has_signal,
+    signal_state,
     last_seen,
     created_at,
     updated_at
@@ -207,6 +223,8 @@ const upsertProfileStatement = db.prepare(`
     is_enabled,
     is_default_sms,
     is_default_voice,
+    has_signal,
+    signal_state,
     last_seen,
     created_at,
     updated_at
@@ -224,6 +242,8 @@ const upsertProfileStatement = db.prepare(`
     @isEnabled,
     @isDefaultSms,
     @isDefaultVoice,
+    @hasSignal,
+    @signalState,
     @lastSeen,
     @createdAt,
     @updatedAt
@@ -240,6 +260,8 @@ const upsertProfileStatement = db.prepare(`
     is_enabled = excluded.is_enabled,
     is_default_sms = excluded.is_default_sms,
     is_default_voice = excluded.is_default_voice,
+    has_signal = excluded.has_signal,
+    signal_state = excluded.signal_state,
     last_seen = excluded.last_seen,
     updated_at = excluded.updated_at
 `);
@@ -292,6 +314,8 @@ export function upsertSimProfile(input: Record<string, unknown>): SimProfile {
     isEnabled: normalizeBoolean(input.isEnabled, existing?.isEnabled ?? true) ? 1 : 0,
     isDefaultSms: isDefaultSms ? 1 : 0,
     isDefaultVoice: isDefaultVoice ? 1 : 0,
+    hasSignal: normalizeOptionalBoolean(input.hasSignal),
+    signalState: normalizeOptionalString(input.signalState),
     lastSeen: normalizeOptionalTimestampString(input.lastSeen),
     createdAt: existing?.createdAt || now,
     updatedAt: now
@@ -376,6 +400,8 @@ function mapProfileRow(row: SimProfileRow): SimProfile {
     isEnabled: row.is_enabled === 1,
     isDefaultSms: row.is_default_sms === 1,
     isDefaultVoice: row.is_default_voice === 1,
+    hasSignal: row.has_signal === null ? null : row.has_signal === 1,
+    signalState: row.signal_state,
     lastSeen: row.last_seen,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -420,6 +446,27 @@ function normalizeOptionalInteger(value: unknown): number | null {
 
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function normalizeOptionalBoolean(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "boolean") {
+    return value ? 1 : 0;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y"].includes(normalized)) {
+    return 1;
+  }
+
+  if (["0", "false", "no", "n"].includes(normalized)) {
+    return 0;
+  }
+
+  return null;
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {

@@ -37,6 +37,8 @@ CREATE TABLE sim_profiles (
   is_enabled INTEGER NOT NULL DEFAULT 1,
   is_default_sms INTEGER NOT NULL DEFAULT 0,
   is_default_voice INTEGER NOT NULL DEFAULT 0,
+  has_signal INTEGER,
+  signal_state TEXT,
   last_seen TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -50,6 +52,15 @@ sim_profiles
 ```
 
 Server upserts reported Profiles into SQLite and disables Profiles from the same device that are no longer reported as active.
+
+Android also refreshes SIM/Profile state periodically so a Profile that starts as no-signal can later update to `in_service` without restarting the app.
+
+Current signal fields:
+
+```text
+hasSignal
+signalState: in_service | out_of_service | emergency_only | power_off | unknown
+```
 
 If Android has not reported a complete Profile list yet, the Web still shows:
 

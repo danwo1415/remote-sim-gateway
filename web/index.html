@@ -250,7 +250,7 @@
 
       <section id="moduleHome" class="grid">
         <div id="receiveSmsModule" class="module-card action" role="button" tabindex="0">
-          <div id="smsCount" class="badge sms">0</div>
+          <div id="smsCount" class="badge sms hidden">0</div>
           <div class="module-icon">✉</div>
           <div>
             <div class="module-title">接收短信</div>
@@ -267,7 +267,7 @@
         </div>
 
         <div class="module-card">
-          <div class="badge">0</div>
+          <div class="badge hidden">0</div>
           <div class="module-icon">☎</div>
           <div>
             <div class="module-title">接听电话</div>
@@ -752,7 +752,9 @@
     }
 
     function updateUnreadIndicators(unreadCount) {
-      document.getElementById('smsCount').textContent = String(unreadCount);
+      const smsCount = document.getElementById('smsCount');
+      smsCount.textContent = String(unreadCount);
+      smsCount.classList.toggle('hidden', unreadCount <= 0);
       document.title = unreadCount > 0 ? `(${unreadCount}) ${baseTitle}` : baseTitle;
       updateAppBadge(unreadCount);
       updateFaviconBadge(unreadCount);

@@ -11,7 +11,13 @@ import { isDeviceAllowed } from "./auth.js";
 import { forwardIncomingSmsEmail } from "./mailer.js";
 import { audit } from "./audit.js";
 import {
+  markCallAnswered,
+  markCallEnded,
+  saveIncomingCall
+} from "./callStore.js";
+import {
   DEFAULT_PROFILE_ID,
+  type SimProfile,
   listEnabledSimProfiles,
   resolveSmsProfile,
   syncDeviceSimProfiles,
@@ -24,7 +30,12 @@ import {
   parseSmsLimit,
   saveIncomingSms
 } from "./smsStore.js";
-import { forwardIncomingSmsTelegram, sendTelegramMessage } from "./telegram.js";
+import {
+  forwardCallResultTelegram,
+  forwardIncomingCallTelegram,
+  forwardIncomingSmsTelegram,
+  sendTelegramMessage
+} from "./telegram.js";
 import {
   getResponseSession,
   getRequestSession,
@@ -45,6 +56,7 @@ const app = express();
 const activeDeviceSockets = new Map<string, WebSocket>();
 const activeBrowserSockets = new Set<WebSocket>();
 const lastSmsSendByActor = new Map<string, number>();
+const pendingTelegramSmsSelections = new Map<string, PendingTelegramSmsSelection>();
 
 app.use(helmet({
   contentSecurityPolicy: false
@@ -292,6 +304,69 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
         });
       }
 
+      if (type === "incoming_call") {
+        const call = saveIncomingCall(deviceId, payload);
+        audit("call_incoming", {
+          deviceId,
+          callId: call.id,
+          phoneNumber: call.phoneNumber,
+          subscriptionId: call.subscriptionId,
+          slotIndex: call.slotIndex,
+          carrierName: call.carrierName
+        });
+
+        void forwardIncomingCallTelegram(call)
+          .then((sent) => {
+            if (sent) {
+              console.log("[telegram] incoming call forwarded");
+            }
+          })
+          .catch((error: unknown) => {
+            audit("telegram_call_forward_failed", {
+              callId: call.id,
+              stage: "incoming",
+              error: getErrorMessage(error)
+            });
+            console.error("[telegram] failed to forward incoming call", error);
+          });
+      }
+
+      if (type === "call_answered") {
+        const call = markCallAnswered(deviceId, payload);
+        audit("call_answered", {
+          deviceId,
+          callId: call.id,
+          phoneNumber: call.phoneNumber,
+          answeredAt: call.answeredAt
+        });
+      }
+
+      if (type === "call_ended") {
+        const call = markCallEnded(deviceId, payload);
+        audit("call_ended", {
+          deviceId,
+          callId: call.id,
+          phoneNumber: call.phoneNumber,
+          status: call.status,
+          ringDurationSeconds: call.ringDurationSeconds
+        });
+
+        void forwardCallResultTelegram(call)
+          .then((sent) => {
+            if (sent) {
+              console.log("[telegram] call result forwarded");
+            }
+          })
+          .catch((error: unknown) => {
+            audit("telegram_call_forward_failed", {
+              callId: call.id,
+              stage: "ended",
+              error: getErrorMessage(error)
+            });
+            console.error("[telegram] failed to forward call result", error);
+          });
+      }
+
       if (type === "incoming_sms") {
         const savedSms = saveIncomingSms(deviceId, payload);
         const unreadCount = getUnreadSmsCount();
@@ -376,6 +451,21 @@ type SubmitSmsSendInput = {
 type SubmitSmsSendResult =
   | { ok: true; deviceId: string; profileId: string; note?: string }
   | { ok: false; status: number; error: string; retryAfterSeconds?: number };
+
+type TelegramProfileOption = {
+  profileId: string;
+  displayName: string;
+  carrierName: string | null;
+  isEnabled: boolean;
+  isDefaultSms: boolean;
+};
+
+type PendingTelegramSmsSelection = {
+  to: string;
+  text: string;
+  createdAt: number;
+  profiles: TelegramProfileOption[];
+};
 
 function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
   let profile;
@@ -463,8 +553,9 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
   const message = req.body?.message || req.body?.edited_message;
   const chatId = message?.chat?.id === undefined ? "" : String(message.chat.id);
   const text = typeof message?.text === "string" ? message.text.trim() : "";
+  const isKnownCommand = text.startsWith("/send") || text.startsWith("/profiles");
 
-  if (!text.startsWith("/send")) {
+  if (!isKnownCommand && !isPendingTelegramSelection(chatId, text)) {
     res.json({ ok: true });
     return;
   }
@@ -475,43 +566,56 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
     return;
   }
 
+  if (isPendingTelegramSelection(chatId, text)) {
+    await handleTelegramProfileChoice(chatId, text);
+    res.json({ ok: true });
+    return;
+  }
+
+  if (text.startsWith("/profiles")) {
+    await sendTelegramReply(formatTelegramProfilesList(buildTelegramProfileOptions()));
+    res.json({ ok: true });
+    return;
+  }
+
   const parsed = parseTelegramSendCommand(text);
   if (!parsed.ok) {
     audit("telegram_sms_send_failed", { chatId, reason: parsed.error });
-    await sendTelegramReply("❌ 格式错误，请使用：\n/send +13022985056 短信内容");
+    await sendTelegramReply(formatTelegramSmsUsageError());
     res.json({ ok: true });
     return;
   }
 
-  const result = submitSmsSend({
-    actorKey: `telegram:${chatId}`,
-    actorLabel: "Telegram",
-    source: "telegram",
-    to: parsed.to,
-    text: parsed.text,
-    profileId: DEFAULT_PROFILE_ID
-  });
-
-  if (!result.ok) {
-    await sendTelegramReply(formatTelegramSmsSendError(result));
+  if (!parsed.profileId) {
+    const profiles = buildTelegramProfileOptions();
+    pendingTelegramSmsSelections.set(chatId, {
+      to: parsed.to,
+      text: parsed.text,
+      createdAt: Date.now(),
+      profiles
+    });
+    await sendTelegramReply(formatTelegramProfileSelectionPrompt(profiles));
     res.json({ ok: true });
     return;
   }
 
-  await sendTelegramReply("✅ 短信发送指令已提交");
+  await submitTelegramSms(chatId, parsed.to, parsed.text, parsed.profileId, buildTelegramProfileOptions().length === 1);
   res.json({ ok: true });
 }
 
-function parseTelegramSendCommand(text: string): { ok: true; to: string; text: string } | { ok: false; error: string } {
-  const match = text.match(/^\/send(?:@\w+)?\s+(\S+)(?:\s+([\s\S]+))?$/);
-  const to = match?.[1]?.trim() || "";
-  const body = match?.[2]?.trim() || "";
+function parseTelegramSendCommand(
+  text: string
+): { ok: true; profileId: string | null; to: string; text: string } | { ok: false; error: string } {
+  const match = text.match(/^\/send(?:@\w+)?(?:\s+--profile\s+(\S+))?\s+(\S+)(?:\s+([\s\S]+))?$/);
+  const profileId = match?.[1]?.trim() || null;
+  const to = match?.[2]?.trim() || "";
+  const body = match?.[3]?.trim() || "";
 
   if (!to || !body) {
     return { ok: false, error: "invalid_send_command" };
   }
 
-  return { ok: true, to, text: body };
+  return { ok: true, profileId, to, text: body };
 }
 
 async function sendTelegramReply(text: string): Promise<void> {
@@ -525,14 +629,143 @@ async function sendTelegramReply(text: string): Promise<void> {
 
 function formatTelegramSmsSendError(result: Exclude<SubmitSmsSendResult, { ok: true }>): string {
   if (result.error === "device_offline" || result.error === "device_socket_unavailable") {
-    return "❌ Android Gateway 当前离线，无法发送";
+    return "❌ Android Gateway 当前离线，无法发送。";
   }
 
   if (result.error === "sms_send_rate_limited") {
     return `❌ 发送过于频繁，请 ${result.retryAfterSeconds || 1} 秒后再试`;
   }
 
+  if (result.error === "profile_not_found") {
+    return "❌ Profile 不存在，请使用 /profiles 查看当前可用 Profile。";
+  }
+
+  if (result.error === "profile_disabled") {
+    return "❌ Profile 当前未启用，请使用 /profiles 查看当前可用 Profile。";
+  }
+
   return "❌ 短信发送指令提交失败";
+}
+
+async function handleTelegramProfileChoice(chatId: string, text: string): Promise<void> {
+  const pending = pendingTelegramSmsSelections.get(chatId);
+  if (!pending) {
+    return;
+  }
+
+  if (Date.now() - pending.createdAt > 5 * 60 * 1000) {
+    pendingTelegramSmsSelections.delete(chatId);
+    await sendTelegramReply("❌ 选择已过期，请重新发送 /send 命令。");
+    return;
+  }
+
+  const selection = Number(text);
+  if (!Number.isInteger(selection) || selection < 1 || selection > pending.profiles.length) {
+    await sendTelegramReply(formatTelegramProfileSelectionPrompt(pending.profiles));
+    return;
+  }
+
+  const profile = pending.profiles[selection - 1];
+  pendingTelegramSmsSelections.delete(chatId);
+  await submitTelegramSms(chatId, pending.to, pending.text, profile.profileId, pending.profiles.length === 1);
+}
+
+async function submitTelegramSms(
+  chatId: string,
+  to: string,
+  text: string,
+  profileId: string,
+  defaultOnly: boolean
+): Promise<void> {
+  const result = submitSmsSend({
+    actorKey: `telegram:${chatId}`,
+    actorLabel: "Telegram",
+    source: "telegram",
+    to,
+    text,
+    profileId
+  });
+
+  if (!result.ok) {
+    await sendTelegramReply(formatTelegramSmsSendError(result));
+    return;
+  }
+
+  if (defaultOnly) {
+    await sendTelegramReply("⚠️ 当前仅支持默认 SIM，已使用默认 SIM 发送。\n✅ 短信发送指令已提交");
+    return;
+  }
+
+  if (result.profileId === DEFAULT_PROFILE_ID) {
+    await sendTelegramReply("✅ 短信发送指令已提交（默认 SIM）");
+    return;
+  }
+
+  await sendTelegramReply(`✅ 短信发送指令已提交\nProfile: ${result.profileId}`);
+}
+
+function isPendingTelegramSelection(chatId: string, text: string): boolean {
+  return chatId === config.telegram.chatId && /^\d+$/.test(text) && pendingTelegramSmsSelections.has(chatId);
+}
+
+function buildTelegramProfileOptions(): TelegramProfileOption[] {
+  const profiles = listEnabledSimProfiles();
+  return [
+    {
+      profileId: DEFAULT_PROFILE_ID,
+      displayName: "默认 SIM",
+      carrierName: null,
+      isEnabled: true,
+      isDefaultSms: true
+    },
+    ...profiles.map(mapTelegramProfileOption)
+  ];
+}
+
+function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
+  return {
+    profileId: profile.profileId,
+    displayName: profile.displayName,
+    carrierName: profile.carrierName,
+    isEnabled: profile.isEnabled,
+    isDefaultSms: profile.isDefaultSms
+  };
+}
+
+function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[]): string {
+  const lines = [
+    "请选择发送 SIM/Profile：",
+    ...profiles.map((profile, index) => `${index + 1}. ${profile.displayName || profile.profileId}`)
+  ];
+
+  if (profiles.length === 1) {
+    lines.push("", "当前仅支持默认 SIM，Profile 选择已预留。");
+  }
+
+  return lines.join("\n");
+}
+
+function formatTelegramProfilesList(profiles: TelegramProfileOption[]): string {
+  return [
+    "Available Profiles:",
+    "",
+    ...profiles.flatMap((profile, index) => [
+      `${index + 1}. ${profile.profileId} - ${profile.displayName}`,
+      `   carrierName: ${profile.carrierName || "-"}`,
+      `   isEnabled: ${profile.isEnabled}`,
+      `   isDefaultSms: ${profile.isDefaultSms}`
+    ])
+  ].join("\n");
+}
+
+function formatTelegramSmsUsageError(): string {
+  return [
+    "❌ 格式错误",
+    "请使用：",
+    "/send +13022985056 短信内容",
+    "或：",
+    "/send --profile <profileId> +13022985056 短信内容"
+  ].join("\n");
 }
 
 function broadcastBrowserEvent(type: string, payload: Record<string, unknown>): void {

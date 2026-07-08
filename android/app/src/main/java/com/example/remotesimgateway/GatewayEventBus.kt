@@ -39,4 +39,17 @@ object GatewayEventBus {
         Log.w("GatewayEventBus", "incoming_sms queued because gateway is offline")
         return false
     }
+
+    fun sendCallEvent(context: Context, type: String, payload: JSONObject): Boolean {
+        val appContext = context.applicationContext
+        val client = wsClient
+
+        if (client?.sendEvent(type, payload) == true) {
+            return true
+        }
+
+        GatewayServiceStarter.start(appContext)
+        Log.w("GatewayEventBus", "$type not sent because gateway is offline")
+        return false
+    }
 }

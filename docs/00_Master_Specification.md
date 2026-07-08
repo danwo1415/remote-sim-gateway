@@ -154,6 +154,7 @@ Telegram Bot scope is limited to:
 - Login verification code
 - Incoming SMS forwarding
 - SMS send command
+- Incoming call notification
 
 Do not implement Telegram call answer, call dial, or hangup commands.
 
