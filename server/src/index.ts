@@ -155,6 +155,14 @@ app.post("/api/sms/send", (req, res) => {
   const text = String(req.body?.text || "").trim();
   const profileId = req.body?.profileId ? String(req.body.profileId).trim() : DEFAULT_PROFILE_ID;
 
+  console.log("[sms] send request received", {
+    source: "web",
+    actor: session.email,
+    to,
+    profileId,
+    textLength: text.length
+  });
+
   if (!to || !text) {
     res.status(400).json({ error: "to_and_text_required" });
     return;
@@ -284,6 +292,13 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "sms_send_submitted") {
+        console.log("[sms] sms_send_submitted received", {
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          usedDefaultSim: payload.usedDefaultSim
+        });
         audit("android_sms_send_submitted", {
           deviceId,
           to: payload.to,
@@ -294,6 +309,14 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "sms_send_failed") {
+        console.warn("[sms] sms_send_failed received", {
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          slotIndex: payload.slotIndex,
+          error: payload.error
+        });
         audit("android_sms_send_failed", {
           deviceId,
           to: payload.to,
@@ -415,9 +438,11 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
   ws.on("close", () => {
     if (activeDeviceSockets.get(deviceId) === ws) {
       activeDeviceSockets.delete(deviceId);
+      markDeviceOffline();
+      console.log(`[device] offline: ${deviceId}`);
+      return;
     }
-    markDeviceOffline();
-    console.log(`[device] offline: ${deviceId}`);
+    console.log(`[device] stale socket closed: ${deviceId}`);
   });
 
   ws.on("error", (error: Error) => {
@@ -794,15 +819,27 @@ function sendDeviceCommand(
   payload: Record<string, unknown>
 ): { ok: true; deviceId: string } | { ok: false; status: number; error: string } {
   const deviceStatus = getDeviceStatus();
-  const deviceId = deviceStatus.deviceId;
+  let deviceId = deviceStatus.deviceId;
+  let ws = deviceId ? activeDeviceSockets.get(deviceId) : undefined;
 
-  if (!deviceStatus.online || !deviceId) {
-    return { ok: false, status: 409, error: "device_offline" };
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const fallback = Array.from(activeDeviceSockets.entries())
+      .find(([, socket]) => socket.readyState === WebSocket.OPEN);
+
+    if (fallback) {
+      [deviceId, ws] = fallback;
+    }
   }
 
-  const ws = activeDeviceSockets.get(deviceId);
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return { ok: false, status: 409, error: "device_socket_unavailable" };
+  if (!deviceId || !ws || ws.readyState !== WebSocket.OPEN) {
+    if (type === "send_sms") {
+      console.warn("[sms] no online Android Gateway", {
+        statusOnline: deviceStatus.online,
+        statusDeviceId: deviceStatus.deviceId,
+        activeDeviceSocketCount: activeDeviceSockets.size
+      });
+    }
+    return { ok: false, status: 409, error: "device_offline" };
   }
 
   try {
@@ -812,7 +849,24 @@ function sendDeviceCommand(
       timestamp: Date.now()
     }));
   } catch {
+    if (type === "send_sms") {
+      console.error("[sms] send command failed to device", {
+        deviceId,
+        to: payload.to,
+        profileId: payload.profileId
+      });
+    }
     return { ok: false, status: 502, error: "device_command_send_failed" };
+  }
+
+  if (type === "send_sms") {
+    console.log("[sms] send command sent to device", {
+      deviceId,
+      to: payload.to,
+      profileId: payload.profileId,
+      subscriptionId: payload.subscriptionId,
+      slotIndex: payload.slotIndex
+    });
   }
 
   return { ok: true, deviceId };

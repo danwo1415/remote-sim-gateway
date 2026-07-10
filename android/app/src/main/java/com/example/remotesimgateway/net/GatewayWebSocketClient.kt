@@ -212,6 +212,8 @@ class GatewayWebSocketClient(
 
             when (type) {
                 "send_sms" -> {
+                    Log.i("GatewayWS", "[sms] send_sms command received")
+
                     val to = payload.getString("to")
                     val text = payload.getString("text")
                     val profileId = payload.optString("profileId", "default")
@@ -229,6 +231,7 @@ class GatewayWebSocketClient(
                                 .put("slotIndex", slotIndex)
                                 .put("error", error.message ?: error.javaClass.simpleName)
                         )
+                        Log.e("GatewayWS", "[sms] send_sms failed", error)
                         return
                     }
 
@@ -241,6 +244,10 @@ class GatewayWebSocketClient(
                                 .put("subscriptionId", result.subscriptionId)
                                 .put("usedDefaultSim", result.usedDefaultSim)
                         )
+                        Log.i(
+                            "GatewayWS",
+                            "[sms] sms_send_submitted sent to server profileId=$profileId subscriptionId=${result.subscriptionId}"
+                        )
                     } else {
                         sendEvent(
                             "sms_send_failed",
@@ -250,6 +257,10 @@ class GatewayWebSocketClient(
                                 .put("subscriptionId", subscriptionId)
                                 .put("slotIndex", slotIndex)
                                 .put("error", result.error ?: "send_failed")
+                        )
+                        Log.w(
+                            "GatewayWS",
+                            "[sms] send_sms failed profileId=$profileId subscriptionId=$subscriptionId slotIndex=$slotIndex error=${result.error ?: "send_failed"}"
                         )
                     }
                 }
