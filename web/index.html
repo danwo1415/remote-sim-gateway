@@ -765,6 +765,8 @@
         } else {
           status.textContent = `发送失败：${error.message}`;
         }
+
+        console.error('[sms] send failed', error);
       }
     }
     function maybeNotifyNewSms(unreadCount, message = null) {

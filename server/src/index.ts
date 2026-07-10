@@ -19,6 +19,7 @@ import {
 import {
   DEFAULT_PROFILE_ID,
   type SimProfile,
+  findDeviceSimProfile,
   listEnabledSimProfiles,
   resolveSmsProfile,
   syncDeviceSimProfiles,
@@ -59,6 +60,8 @@ const lastSmsSendByActor = new Map<string, number>();
 const pendingTelegramSmsSelections = new Map<string, PendingTelegramSmsSelection>();
 const pendingSmsSendAcks = new Map<string, PendingSmsSendAck>();
 const SMS_SEND_ACK_TIMEOUT_MS = 15_000;
+let telegramPollingOffset = 0;
+let telegramPollingStarted = false;
 
 app.use(helmet({
   contentSecurityPolicy: false
@@ -195,6 +198,13 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
   });
 
   if (!result.ok) {
+    console.warn("[sms] send request failed", {
+      source: "web",
+      actor: session.email,
+      to,
+      profileId,
+      error: result.error
+    });
     res.status(result.status).json({
       error: result.error,
       ...(result.retryAfterSeconds ? { retryAfterSeconds: result.retryAfterSeconds } : {})
@@ -366,7 +376,8 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "incoming_call") {
-        const call = saveIncomingCall(deviceId, payload);
+        const callPayload = enrichCallPayloadWithSimProfile(deviceId, payload);
+        const call = saveIncomingCall(deviceId, callPayload);
         audit("call_incoming", {
           deviceId,
           callId: call.id,
@@ -379,7 +390,7 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "call_answered") {
-        const call = markCallAnswered(deviceId, payload);
+        const call = markCallAnswered(deviceId, enrichCallPayloadWithSimProfile(deviceId, payload));
         audit("call_answered", {
           deviceId,
           callId: call.id,
@@ -389,13 +400,14 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "call_ended") {
-        const call = markCallEnded(deviceId, payload);
+        const call = markCallEnded(deviceId, enrichCallPayloadWithSimProfile(deviceId, payload));
         audit("call_ended", {
           deviceId,
           callId: call.id,
           phoneNumber: call.phoneNumber,
           status: call.status,
-          ringDurationSeconds: call.ringDurationSeconds
+          ringDurationSeconds: call.ringDurationSeconds,
+          simNumber: call.simNumber
         });
 
         void forwardCallResultTelegram(call)
@@ -484,6 +496,7 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
 
 server.listen(port, () => {
   console.log(`Remote SIM Gateway server listening on port ${port}`);
+  startTelegramPolling();
 });
 
 type SmsSendSource = "web" | "telegram";
@@ -680,54 +693,65 @@ function cancelSmsSendAck(commandId: string): void {
 }
 
 async function handleTelegramWebhook(req: Request, res: Response): Promise<void> {
+  await processTelegramMessage(req.body?.message || req.body?.edited_message, "webhook");
+  res.json({ ok: true });
+}
+
+type TelegramMessageLike = {
+  chat?: { id?: unknown };
+  text?: unknown;
+};
+
+type TelegramUpdateLike = {
+  update_id?: unknown;
+  message?: TelegramMessageLike;
+  edited_message?: TelegramMessageLike;
+};
+
+async function processTelegramMessage(message: TelegramMessageLike | undefined, source: "webhook" | "polling"): Promise<void> {
   if (!config.telegram.botToken || !config.telegram.chatId) {
-    console.warn("[telegram] webhook ignored: bot token or chat id is not configured");
-    res.json({ ok: true });
+    console.warn("[telegram] command ignored: bot token or chat id is not configured");
     return;
   }
 
-  const message = req.body?.message || req.body?.edited_message;
   const chatId = message?.chat?.id === undefined ? "" : String(message.chat.id);
   const text = typeof message?.text === "string" ? message.text.trim() : "";
-  const isKnownCommand = text.startsWith("/send") || text.startsWith("/profiles");
+  const normalizedText = text.toLowerCase();
+  const isKnownCommand = normalizedText.startsWith("/send") || normalizedText.startsWith("/profiles");
 
   if (isKnownCommand || isPendingTelegramSelection(chatId, text)) {
-    console.log("[telegram] webhook command received", {
+    console.log("[telegram] command received", {
+      source,
       chatId,
       text: text.slice(0, 80)
     });
   }
 
   if (!isKnownCommand && !isPendingTelegramSelection(chatId, text)) {
-    res.json({ ok: true });
     return;
   }
 
   if (chatId !== config.telegram.chatId) {
-    console.warn("[telegram] command rejected: chat id is not allowed", { chatId });
-    audit("telegram_sms_send_rejected", { chatId, reason: "chat_not_allowed" });
-    res.json({ ok: true });
+    console.warn("[telegram] command rejected: chat id is not allowed", { source, chatId });
+    audit("telegram_sms_send_rejected", { chatId, source, reason: "chat_not_allowed" });
     return;
   }
 
   if (isPendingTelegramSelection(chatId, text)) {
     await handleTelegramProfileChoice(chatId, text);
-    res.json({ ok: true });
     return;
   }
 
-  if (text.startsWith("/profiles")) {
+  if (normalizedText.startsWith("/profiles")) {
     const profiles = buildTelegramProfileOptions();
     await sendTelegramReply(profiles.length > 0 ? formatTelegramProfilesList(profiles) : formatNoTelegramProfiles());
-    res.json({ ok: true });
     return;
   }
 
   const parsed = parseTelegramSendCommand(text);
   if (!parsed.ok) {
-    audit("telegram_sms_send_failed", { chatId, reason: parsed.error });
+    audit("telegram_sms_send_failed", { chatId, source, reason: parsed.error });
     await sendTelegramReply(formatTelegramSmsUsageError());
-    res.json({ ok: true });
     return;
   }
 
@@ -735,7 +759,6 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
     const profiles = buildTelegramProfileOptions();
     if (profiles.length === 0) {
       await sendTelegramReply(formatNoTelegramProfiles());
-      res.json({ ok: true });
       return;
     }
 
@@ -746,14 +769,83 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
       profiles
     });
     await sendTelegramReply(formatTelegramProfileSelectionPrompt(profiles));
-    res.json({ ok: true });
     return;
   }
 
   await submitTelegramSms(chatId, parsed.to, parsed.text, parsed.profileId, buildTelegramProfileOptions().length === 1);
-  res.json({ ok: true });
 }
 
+function startTelegramPolling(): void {
+  if (telegramPollingStarted || !config.telegram.botToken || !config.telegram.chatId) {
+    return;
+  }
+
+  telegramPollingStarted = true;
+  void resetTelegramWebhookForPolling()
+    .catch((error: unknown) => {
+      audit("telegram_polling_webhook_reset_failed", { error: getErrorMessage(error) });
+      console.error("[telegram] failed to reset webhook for polling", error);
+    })
+    .finally(() => {
+      scheduleTelegramPolling(1000);
+    });
+}
+
+function scheduleTelegramPolling(delayMs: number): void {
+  const timer = setTimeout(() => {
+    void pollTelegramUpdates();
+  }, delayMs);
+  timer.unref?.();
+}
+
+async function resetTelegramWebhookForPolling(): Promise<void> {
+  const response = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/deleteWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drop_pending_updates: false })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Telegram deleteWebhook failed: ${response.status}`);
+  }
+
+  console.log("[telegram] polling enabled");
+}
+
+async function pollTelegramUpdates(): Promise<void> {
+  try {
+    const url = new URL(`https://api.telegram.org/bot${config.telegram.botToken}/getUpdates`);
+    url.searchParams.set("timeout", "20");
+    url.searchParams.set("allowed_updates", JSON.stringify(["message", "edited_message"]));
+    if (telegramPollingOffset > 0) {
+      url.searchParams.set("offset", String(telegramPollingOffset));
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Telegram getUpdates failed: ${response.status}`);
+    }
+
+    const body = await response.json() as { ok?: boolean; result?: TelegramUpdateLike[]; description?: string };
+    if (!body.ok) {
+      throw new Error(body.description || "Telegram getUpdates failed");
+    }
+
+    for (const update of body.result || []) {
+      const updateId = Number(update.update_id);
+      if (Number.isInteger(updateId)) {
+        telegramPollingOffset = Math.max(telegramPollingOffset, updateId + 1);
+      }
+
+      await processTelegramMessage(update.message || update.edited_message, "polling");
+    }
+  } catch (error) {
+    audit("telegram_polling_failed", { error: getErrorMessage(error) });
+    console.error("[telegram] polling failed", error);
+  } finally {
+    scheduleTelegramPolling(1000);
+  }
+}
 function parseTelegramSendCommand(
   text: string
 ): { ok: true; profileId: string | null; to: string; text: string } | { ok: false; error: string } {
@@ -963,6 +1055,56 @@ function broadcastBrowserEvent(type: string, payload: Record<string, unknown>): 
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function enrichCallPayloadWithSimProfile(
+  deviceId: string,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const profile = findDeviceSimProfile(deviceId, payload);
+  if (!profile) {
+    return payload;
+  }
+
+  const enriched = {
+    ...payload,
+    subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
+    slotIndex: payload.slotIndex ?? profile.slotIndex,
+    carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
+    simNumber: firstText(payload.simNumber, profile.phoneNumber)
+  };
+
+  if (enriched.simNumber) {
+    console.log("[call] sim number resolved", {
+      deviceId,
+      profileId: profile.profileId,
+      simNumber: enriched.simNumber
+    });
+  } else {
+    console.warn("[call] sim number unavailable for profile", {
+      deviceId,
+      profileId: profile.profileId,
+      subscriptionId: profile.subscriptionId,
+      slotIndex: profile.slotIndex
+    });
+  }
+
+  return enriched;
+}
+
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    const text = String(value).trim();
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
 }
 
 function sendDeviceCommand(

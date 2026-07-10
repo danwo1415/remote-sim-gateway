@@ -159,6 +159,15 @@ const updateEndedStatement = db.prepare(`
   WHERE id = @id
 `);
 
+const updateCallMetadataStatement = db.prepare(`
+  UPDATE call_logs
+  SET subscription_id = COALESCE(@subscriptionId, subscription_id),
+      slot_index = COALESCE(@slotIndex, slot_index),
+      carrier_name = COALESCE(@carrierName, carrier_name),
+      sim_number = COALESCE(@simNumber, sim_number)
+  WHERE id = @id
+`);
+
 export function saveIncomingCall(deviceId: string, payload: CallPayload): StoredCallLog {
   const createdAt = new Date().toISOString();
   const startedAt = normalizeDateString(payload.startedAt) || createdAt;
@@ -181,6 +190,7 @@ export function markCallAnswered(deviceId: string, payload: CallPayload): Stored
   const answeredAt = normalizeDateString(payload.answeredAt) || new Date().toISOString();
   const call = findOrCreateActiveCall(deviceId, phoneNumber, answeredAt);
 
+  updateCallMetadata(call.id, payload);
   updateAnsweredStatement.run({
     id: call.id,
     answeredAt
@@ -198,6 +208,7 @@ export function markCallEnded(deviceId: string, payload: CallPayload): StoredCal
   const ringDurationSeconds =
     normalizeOptionalInteger(payload.ringDurationSeconds) ?? calculateRingDurationSeconds(call.startedAt, answeredAt || endedAt);
 
+  updateCallMetadata(call.id, payload);
   updateEndedStatement.run({
     id: call.id,
     endedAt,
@@ -227,6 +238,16 @@ function loadCall(id: number): StoredCallLog {
   }
 
   return mapCallRow(row);
+}
+
+function updateCallMetadata(id: number, payload: CallPayload): void {
+  updateCallMetadataStatement.run({
+    id,
+    subscriptionId: normalizeOptionalString(payload.subscriptionId),
+    slotIndex: normalizeOptionalInteger(payload.slotIndex),
+    carrierName: normalizeOptionalString(payload.carrierName),
+    simNumber: normalizeOptionalString(payload.simNumber)
+  });
 }
 
 function mapCallRow(row: CallRow): StoredCallLog {

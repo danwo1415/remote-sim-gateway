@@ -87,10 +87,23 @@ object SimProfileReporter {
             return ""
         }
 
-        return activeSubscriptions(context)
+        val subscriptionNumber = activeSubscriptions(context)
             .firstOrNull { it.subscriptionId == subscriptionId }
             ?.let { safePhoneNumber(it) }
             .orEmpty()
+
+        if (subscriptionNumber.isNotBlank()) {
+            return subscriptionNumber
+        }
+
+        return try {
+            context.getSystemService(TelephonyManager::class.java)
+                .createForSubscriptionId(subscriptionId)
+                .line1Number
+                .orEmpty()
+        } catch (error: SecurityException) {
+            ""
+        }
     }
 
     private fun activeSubscriptions(context: Context): List<SubscriptionInfo> {

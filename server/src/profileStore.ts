@@ -45,7 +45,7 @@ export type SimProfile = {
 
 export type SmsProfileSelection = {
   profileId: string;
-  subscriptionId?: string;
+  subscriptionId?: number;
   slotIndex?: number;
   note?: string;
 };
@@ -255,7 +255,7 @@ const upsertProfileStatement = db.prepare(`
     carrier_name = excluded.carrier_name,
     display_name = excluded.display_name,
     country = excluded.country,
-    phone_number = excluded.phone_number,
+    phone_number = COALESCE(excluded.phone_number, sim_profiles.phone_number),
     slot_index = excluded.slot_index,
     is_enabled = excluded.is_enabled,
     is_default_sms = excluded.is_default_sms,
@@ -377,11 +377,46 @@ export function resolveSmsProfile(profileIdInput: unknown): SmsProfileSelection 
     throw new Error("profile_disabled");
   }
 
+  const subscriptionId = normalizeOptionalInteger(profile.subscriptionId);
+
   return {
     profileId: profile.profileId,
-    ...(profile.subscriptionId ? { subscriptionId: profile.subscriptionId } : {}),
+    ...(subscriptionId !== null ? { subscriptionId } : {}),
     ...(profile.slotIndex !== null ? { slotIndex: profile.slotIndex } : {})
   };
+}
+
+export function findDeviceSimProfile(
+  deviceId: string,
+  input: { profileId?: unknown; subscriptionId?: unknown; slotIndex?: unknown }
+): SimProfile | null {
+  const profileId = normalizeOptionalString(input.profileId);
+  const subscriptionId = normalizeOptionalString(input.subscriptionId);
+  const slotIndex = normalizeOptionalInteger(input.slotIndex);
+  const profiles = (listProfilesByDeviceStatement.all({ deviceId }) as SimProfileRow[]).map(mapProfileRow);
+
+  if (profileId) {
+    const byProfile = profiles.find((profile) => profile.profileId === profileId);
+    if (byProfile) {
+      return byProfile;
+    }
+  }
+
+  if (subscriptionId) {
+    const bySubscription = profiles.find((profile) => profile.subscriptionId === subscriptionId);
+    if (bySubscription) {
+      return bySubscription;
+    }
+  }
+
+  if (slotIndex !== null) {
+    const bySlot = profiles.find((profile) => profile.slotIndex === slotIndex);
+    if (bySlot) {
+      return bySlot;
+    }
+  }
+
+  return null;
 }
 
 function mapProfileRow(row: SimProfileRow): SimProfile {
