@@ -10,6 +10,7 @@ type CallPayload = {
   subscriptionId?: unknown;
   slotIndex?: unknown;
   carrierName?: unknown;
+  simNumber?: unknown;
 };
 
 type CallRow = {
@@ -24,6 +25,7 @@ type CallRow = {
   subscription_id: string | null;
   slot_index: number | null;
   carrier_name: string | null;
+  sim_number: string | null;
   created_at: string;
 };
 
@@ -39,6 +41,7 @@ export type StoredCallLog = {
   subscriptionId: string | null;
   slotIndex: number | null;
   carrierName: string | null;
+  simNumber: string | null;
   createdAt: string;
 };
 
@@ -55,6 +58,7 @@ db.exec(`
     subscription_id TEXT,
     slot_index INTEGER,
     carrier_name TEXT,
+    sim_number TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -64,6 +68,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_call_logs_started_at
     ON call_logs(started_at DESC);
 `);
+
+ensureColumn("call_logs", "sim_number", "TEXT");
 
 const insertCallStatement = db.prepare(`
   INSERT INTO call_logs (
@@ -77,6 +83,7 @@ const insertCallStatement = db.prepare(`
     subscription_id,
     slot_index,
     carrier_name,
+    sim_number,
     created_at
   )
   VALUES (
@@ -90,6 +97,7 @@ const insertCallStatement = db.prepare(`
     @subscriptionId,
     @slotIndex,
     @carrierName,
+    @simNumber,
     @createdAt
   )
 `);
@@ -107,6 +115,7 @@ const getCallStatement = db.prepare(`
     subscription_id,
     slot_index,
     carrier_name,
+    sim_number,
     created_at
   FROM call_logs
   WHERE id = @id
@@ -125,6 +134,7 @@ const getActiveCallStatement = db.prepare(`
     subscription_id,
     slot_index,
     carrier_name,
+    sim_number,
     created_at
   FROM call_logs
   WHERE device_id = @deviceId
@@ -159,6 +169,7 @@ export function saveIncomingCall(deviceId: string, payload: CallPayload): Stored
     subscriptionId: normalizeOptionalString(payload.subscriptionId),
     slotIndex: normalizeOptionalInteger(payload.slotIndex),
     carrierName: normalizeOptionalString(payload.carrierName),
+    simNumber: normalizeOptionalString(payload.simNumber),
     createdAt
   });
 
@@ -231,6 +242,7 @@ function mapCallRow(row: CallRow): StoredCallLog {
     subscriptionId: row.subscription_id,
     slotIndex: row.slot_index,
     carrierName: row.carrier_name,
+    simNumber: row.sim_number,
     createdAt: row.created_at
   };
 }
@@ -292,4 +304,13 @@ function stringify(value: unknown, fallback: string): string {
   }
 
   return String(value).trim();
+}
+
+function ensureColumn(tableName: string, columnName: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }

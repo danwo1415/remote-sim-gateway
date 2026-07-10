@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +33,6 @@ import {
 } from "./smsStore.js";
 import {
   forwardCallResultTelegram,
-  forwardIncomingCallTelegram,
   forwardIncomingSmsTelegram,
   sendTelegramMessage
 } from "./telegram.js";
@@ -57,6 +57,8 @@ const activeDeviceSockets = new Map<string, WebSocket>();
 const activeBrowserSockets = new Set<WebSocket>();
 const lastSmsSendByActor = new Map<string, number>();
 const pendingTelegramSmsSelections = new Map<string, PendingTelegramSmsSelection>();
+const pendingSmsSendAcks = new Map<string, PendingSmsSendAck>();
+const SMS_SEND_ACK_TIMEOUT_MS = 15_000;
 
 app.use(helmet({
   contentSecurityPolicy: false
@@ -150,6 +152,10 @@ app.post("/api/sms/mark-read", (_req, res) => {
 });
 
 app.post("/api/sms/send", (req, res) => {
+  void handleWebSmsSend(req, res);
+});
+
+async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
   const session = getResponseSession(res);
   const to = String(req.body?.to || "").trim();
   const text = String(req.body?.text || "").trim();
@@ -168,7 +174,7 @@ app.post("/api/sms/send", (req, res) => {
     return;
   }
 
-  const result = submitSmsSend({
+  const result = await submitSmsSend({
     actorKey: `web:${session.email}`,
     actorLabel: session.email,
     source: "web",
@@ -189,9 +195,10 @@ app.post("/api/sms/send", (req, res) => {
     ok: true,
     deviceId: result.deviceId,
     profileId: result.profileId,
-    note: result.note
+    note: result.note,
+    status: "submitted"
   });
-});
+}
 
 app.use(express.static(webRoot));
 
@@ -294,6 +301,7 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       if (type === "sms_send_submitted") {
         console.log("[sms] sms_send_submitted received", {
           deviceId,
+          commandId: payload.commandId,
           to: payload.to,
           profileId: payload.profileId,
           subscriptionId: payload.subscriptionId,
@@ -306,11 +314,21 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
           subscriptionId: payload.subscriptionId,
           usedDefaultSim: payload.usedDefaultSim
         });
+        resolveSmsSendAck(payload.commandId, {
+          ok: true,
+          commandId: String(payload.commandId || ""),
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          usedDefaultSim: payload.usedDefaultSim
+        });
       }
 
       if (type === "sms_send_failed") {
         console.warn("[sms] sms_send_failed received", {
           deviceId,
+          commandId: payload.commandId,
           to: payload.to,
           profileId: payload.profileId,
           subscriptionId: payload.subscriptionId,
@@ -325,6 +343,15 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
           slotIndex: payload.slotIndex,
           error: payload.error
         });
+        resolveSmsSendAck(payload.commandId, {
+          ok: false,
+          commandId: String(payload.commandId || ""),
+          deviceId,
+          to: payload.to,
+          profileId: payload.profileId,
+          subscriptionId: payload.subscriptionId,
+          error: String(payload.error || "android_sms_send_failed")
+        });
       }
 
       if (type === "incoming_call") {
@@ -335,23 +362,9 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
           phoneNumber: call.phoneNumber,
           subscriptionId: call.subscriptionId,
           slotIndex: call.slotIndex,
-          carrierName: call.carrierName
+          carrierName: call.carrierName,
+          simNumber: call.simNumber
         });
-
-        void forwardIncomingCallTelegram(call)
-          .then((sent) => {
-            if (sent) {
-              console.log("[telegram] incoming call forwarded");
-            }
-          })
-          .catch((error: unknown) => {
-            audit("telegram_call_forward_failed", {
-              callId: call.id,
-              stage: "incoming",
-              error: getErrorMessage(error)
-            });
-            console.error("[telegram] failed to forward incoming call", error);
-          });
       }
 
       if (type === "call_answered") {
@@ -477,10 +490,27 @@ type SubmitSmsSendResult =
   | { ok: true; deviceId: string; profileId: string; note?: string }
   | { ok: false; status: number; error: string; retryAfterSeconds?: number };
 
+type SmsSendAck = {
+  ok: boolean;
+  commandId: string;
+  deviceId: string;
+  to?: unknown;
+  profileId?: unknown;
+  subscriptionId?: unknown;
+  usedDefaultSim?: unknown;
+  error?: string;
+};
+
+type PendingSmsSendAck = {
+  timeout: ReturnType<typeof setTimeout>;
+  resolve: (ack: SmsSendAck) => void;
+};
+
 type TelegramProfileOption = {
   profileId: string;
   displayName: string;
   carrierName: string | null;
+  phoneNumber: string | null;
   isEnabled: boolean;
   isDefaultSms: boolean;
 };
@@ -492,7 +522,7 @@ type PendingTelegramSmsSelection = {
   profiles: TelegramProfileOption[];
 };
 
-function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
+async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendResult> {
   let profile;
 
   try {
@@ -530,7 +560,9 @@ function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
     };
   }
 
+  const commandId = crypto.randomUUID();
   const commandPayload = {
+    commandId,
     to: input.to,
     text: input.text,
     profileId: profile.profileId,
@@ -538,9 +570,11 @@ function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
     ...(profile.slotIndex !== undefined ? { slotIndex: profile.slotIndex } : {})
   };
 
+  const ackPromise = waitForSmsSendAck(commandId);
   const result = sendDeviceCommand("send_sms", commandPayload);
 
   if (!result.ok) {
+    cancelSmsSendAck(commandId);
     audit("sms_send_failed", {
       source: input.source,
       actor: input.actorLabel,
@@ -552,13 +586,33 @@ function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
   }
 
   lastSmsSendByActor.set(input.actorKey, now);
+  const ack = await ackPromise;
+
+  if (!ack.ok) {
+    const error = ack.error || "android_sms_send_failed";
+    audit("sms_send_failed", {
+      source: input.source,
+      actor: input.actorLabel,
+      to: input.to,
+      profileId: profile.profileId,
+      deviceId: result.deviceId,
+      reason: error
+    });
+    return {
+      ok: false,
+      status: error === "sms_send_ack_timeout" ? 504 : 502,
+      error
+    };
+  }
+
   audit("sms_send_submitted", {
     source: input.source,
     actor: input.actorLabel,
     to: input.to,
     profileId: profile.profileId,
     deviceId: result.deviceId,
-    note: profile.note
+    note: profile.note,
+    commandId
   });
 
   return {
@@ -567,6 +621,51 @@ function submitSmsSend(input: SubmitSmsSendInput): SubmitSmsSendResult {
     profileId: profile.profileId,
     note: profile.note
   };
+}
+
+function waitForSmsSendAck(commandId: string): Promise<SmsSendAck> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      pendingSmsSendAcks.delete(commandId);
+      resolve({
+        ok: false,
+        commandId,
+        deviceId: "",
+        error: "sms_send_ack_timeout"
+      });
+    }, SMS_SEND_ACK_TIMEOUT_MS);
+
+    pendingSmsSendAcks.set(commandId, {
+      timeout,
+      resolve
+    });
+  });
+}
+
+function resolveSmsSendAck(commandIdInput: unknown, ack: SmsSendAck): void {
+  const commandId = String(commandIdInput || "");
+  if (!commandId) {
+    return;
+  }
+
+  const pending = pendingSmsSendAcks.get(commandId);
+  if (!pending) {
+    return;
+  }
+
+  clearTimeout(pending.timeout);
+  pendingSmsSendAcks.delete(commandId);
+  pending.resolve(ack);
+}
+
+function cancelSmsSendAck(commandId: string): void {
+  const pending = pendingSmsSendAcks.get(commandId);
+  if (!pending) {
+    return;
+  }
+
+  clearTimeout(pending.timeout);
+  pendingSmsSendAcks.delete(commandId);
 }
 
 async function handleTelegramWebhook(req: Request, res: Response): Promise<void> {
@@ -631,6 +730,18 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
 function parseTelegramSendCommand(
   text: string
 ): { ok: true; profileId: string | null; to: string; text: string } | { ok: false; error: string } {
+  const slashFormat = text.match(/^\/send(?:@\w+)?\s+sms\s*\/\s*([^/]+?)\s*\/\s*([\s\S]+)$/i);
+  if (slashFormat) {
+    const to = slashFormat[1]?.trim() || "";
+    const body = slashFormat[2]?.trim() || "";
+
+    if (!to || !body) {
+      return { ok: false, error: "invalid_send_command" };
+    }
+
+    return { ok: true, profileId: null, to, text: body };
+  }
+
   const match = text.match(/^\/send(?:@\w+)?(?:\s+--profile\s+(\S+))?\s+(\S+)(?:\s+([\s\S]+))?$/);
   const profileId = match?.[1]?.trim() || null;
   const to = match?.[2]?.trim() || "";
@@ -654,22 +765,26 @@ async function sendTelegramReply(text: string): Promise<void> {
 
 function formatTelegramSmsSendError(result: Exclude<SubmitSmsSendResult, { ok: true }>): string {
   if (result.error === "device_offline" || result.error === "device_socket_unavailable") {
-    return "❌ Android Gateway 当前离线，无法发送。";
+    return "Send failed: Android Gateway is offline.";
   }
 
   if (result.error === "sms_send_rate_limited") {
-    return `❌ 发送过于频繁，请 ${result.retryAfterSeconds || 1} 秒后再试`;
+    return `Send failed: rate limited. Retry after ${result.retryAfterSeconds || 1}s.`;
   }
 
   if (result.error === "profile_not_found") {
-    return "❌ Profile 不存在，请使用 /profiles 查看当前可用 Profile。";
+    return "Send failed: profile not found. Use /profiles to view available profiles.";
   }
 
   if (result.error === "profile_disabled") {
-    return "❌ Profile 当前未启用，请使用 /profiles 查看当前可用 Profile。";
+    return "Send failed: profile is disabled. Use /profiles to view available profiles.";
   }
 
-  return "❌ 短信发送指令提交失败";
+  if (result.error === "sms_send_ack_timeout") {
+    return "Send failed: Android Gateway did not return sms_send_submitted. Please update/restart the APK.";
+  }
+
+  return `Send failed: ${result.error}`;
 }
 
 async function handleTelegramProfileChoice(chatId: string, text: string): Promise<void> {
@@ -680,7 +795,7 @@ async function handleTelegramProfileChoice(chatId: string, text: string): Promis
 
   if (Date.now() - pending.createdAt > 5 * 60 * 1000) {
     pendingTelegramSmsSelections.delete(chatId);
-    await sendTelegramReply("❌ 选择已过期，请重新发送 /send 命令。");
+    await sendTelegramReply("Selection expired. Please send /send again.");
     return;
   }
 
@@ -702,7 +817,7 @@ async function submitTelegramSms(
   profileId: string,
   defaultOnly: boolean
 ): Promise<void> {
-  const result = submitSmsSend({
+  const result = await submitSmsSend({
     actorKey: `telegram:${chatId}`,
     actorLabel: "Telegram",
     source: "telegram",
@@ -716,17 +831,16 @@ async function submitTelegramSms(
     return;
   }
 
+  const lines = [
+    "SMS command submitted.",
+    `Profile: ${result.profileId}`
+  ];
+
   if (defaultOnly) {
-    await sendTelegramReply("⚠️ 当前仅支持默认 SIM，已使用默认 SIM 发送。\n✅ 短信发送指令已提交");
-    return;
+    lines.push("Note: only default SIM is available.");
   }
 
-  if (result.profileId === DEFAULT_PROFILE_ID) {
-    await sendTelegramReply("✅ 短信发送指令已提交（默认 SIM）");
-    return;
-  }
-
-  await sendTelegramReply(`✅ 短信发送指令已提交\nProfile: ${result.profileId}`);
+  await sendTelegramReply(lines.join("\n"));
 }
 
 function isPendingTelegramSelection(chatId: string, text: string): boolean {
@@ -738,8 +852,9 @@ function buildTelegramProfileOptions(): TelegramProfileOption[] {
   return [
     {
       profileId: DEFAULT_PROFILE_ID,
-      displayName: "默认 SIM",
+      displayName: "Default SIM",
       carrierName: null,
+      phoneNumber: null,
       isEnabled: true,
       isDefaultSms: true
     },
@@ -752,6 +867,7 @@ function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
     profileId: profile.profileId,
     displayName: profile.displayName,
     carrierName: profile.carrierName,
+    phoneNumber: profile.phoneNumber,
     isEnabled: profile.isEnabled,
     isDefaultSms: profile.isDefaultSms
   };
@@ -759,12 +875,14 @@ function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
 
 function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[]): string {
   const lines = [
-    "请选择发送 SIM/Profile：",
-    ...profiles.map((profile, index) => `${index + 1}. ${profile.displayName || profile.profileId}`)
+    "Choose sending SIM/Profile:",
+    ...profiles.map((profile, index) => `${index + 1}. ${formatTelegramProfileLabel(profile)}`),
+    "",
+    "Reply with the number to send."
   ];
 
   if (profiles.length === 1) {
-    lines.push("", "当前仅支持默认 SIM，Profile 选择已预留。");
+    lines.push("", "Current server only has default SIM. Profile selection is reserved.");
   }
 
   return lines.join("\n");
@@ -775,8 +893,9 @@ function formatTelegramProfilesList(profiles: TelegramProfileOption[]): string {
     "Available Profiles:",
     "",
     ...profiles.flatMap((profile, index) => [
-      `${index + 1}. ${profile.profileId} - ${profile.displayName}`,
+      `${index + 1}. ${profile.profileId} - ${formatTelegramProfileLabel(profile)}`,
       `   carrierName: ${profile.carrierName || "-"}`,
+      `   phoneNumber: ${profile.phoneNumber || "-"}`,
       `   isEnabled: ${profile.isEnabled}`,
       `   isDefaultSms: ${profile.isDefaultSms}`
     ])
@@ -785,12 +904,20 @@ function formatTelegramProfilesList(profiles: TelegramProfileOption[]): string {
 
 function formatTelegramSmsUsageError(): string {
   return [
-    "❌ 格式错误",
-    "请使用：",
-    "/send +13022985056 短信内容",
-    "或：",
-    "/send --profile <profileId> +13022985056 短信内容"
+    "Format error.",
+    "Use:",
+    "/send sms / +13022985056 / message",
+    "or:",
+    "/send --profile <profileId> +13022985056 message"
   ].join("\n");
+}
+
+function formatTelegramProfileLabel(profile: TelegramProfileOption): string {
+  return [
+    profile.displayName || profile.profileId,
+    profile.phoneNumber || "",
+    profile.carrierName || ""
+  ].filter(Boolean).join(" - ");
 }
 
 function broadcastBrowserEvent(type: string, payload: Record<string, unknown>): void {

@@ -271,7 +271,8 @@ export function listSimProfiles(): SimProfile[] {
 }
 
 export function listEnabledSimProfiles(): SimProfile[] {
-  return (listEnabledProfilesStatement.all() as SimProfileRow[]).map(mapProfileRow);
+  const profiles = (listEnabledProfilesStatement.all() as SimProfileRow[]).map(mapProfileRow);
+  return dedupeEnabledProfiles(profiles);
 }
 
 export function getSimProfile(profileId: string): SimProfile | null {
@@ -406,6 +407,71 @@ function mapProfileRow(row: SimProfileRow): SimProfile {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function dedupeEnabledProfiles(profiles: SimProfile[]): SimProfile[] {
+  const selected = new Map<string, SimProfile>();
+
+  for (const profile of profiles) {
+    const key = profileDeduplicationKey(profile);
+    const existing = selected.get(key);
+
+    if (!existing || shouldPreferProfile(profile, existing)) {
+      selected.set(key, profile);
+    }
+  }
+
+  return Array.from(selected.values())
+    .sort((a, b) => {
+      if (a.isDefaultSms !== b.isDefaultSms) {
+        return a.isDefaultSms ? -1 : 1;
+      }
+
+      return `${a.displayName}:${a.profileId}`.localeCompare(`${b.displayName}:${b.profileId}`);
+    });
+}
+
+function profileDeduplicationKey(profile: SimProfile): string {
+  if (profile.iccId) {
+    return `icc:${profile.iccId}`;
+  }
+
+  if (profile.phoneNumber) {
+    return `phone:${profile.phoneNumber}`;
+  }
+
+  if (profile.subscriptionId) {
+    return `subscription:${profile.subscriptionId}`;
+  }
+
+  const carrierName = profile.carrierName || "";
+  if (carrierName && profile.slotIndex !== null) {
+    return `slot:${profile.slotIndex}:${carrierName}`;
+  }
+
+  return `profile:${profile.profileId}`;
+}
+
+function shouldPreferProfile(candidate: SimProfile, existing: SimProfile): boolean {
+  const candidateScore = profileFreshnessScore(candidate);
+  const existingScore = profileFreshnessScore(existing);
+
+  if (candidateScore !== existingScore) {
+    return candidateScore > existingScore;
+  }
+
+  return new Date(candidate.updatedAt).getTime() > new Date(existing.updatedAt).getTime();
+}
+
+function profileFreshnessScore(profile: SimProfile): number {
+  let score = 0;
+
+  if (profile.deviceId) score += 8;
+  if (profile.lastSeen) score += 4;
+  if (profile.isDefaultSms) score += 2;
+  if (profile.hasSignal) score += 1;
+
+  return score;
 }
 
 function normalizeOptionalString(value: unknown): string | null {

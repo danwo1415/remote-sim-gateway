@@ -24,6 +24,8 @@ class CallStateReceiver : BroadcastReceiver() {
             "android.telephony.extra.SUBSCRIPTION_INDEX"
         )
         val slotIndex = readOptionalIntExtra(intent, "slot", "slotIndex", "simSlotIndex")
+        val effectiveSubscriptionId = subscriptionId
+            ?: slotIndex?.let { SimProfileReporter.findSubscriptionIdBySlotIndex(context, it) }
 
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
@@ -31,16 +33,22 @@ class CallStateReceiver : BroadcastReceiver() {
                 activeNumber = number
                 activeStartedAtMillis = System.currentTimeMillis()
                 activeAnsweredAtMillis = null
+                activeSubscriptionId = effectiveSubscriptionId
+                activeSlotIndex = slotIndex
 
                 val payload = JSONObject()
                     .put("number", number)
                     .put("startedAt", iso(activeStartedAtMillis))
 
-                if (subscriptionId != null) {
-                    payload.put("subscriptionId", subscriptionId)
-                    val carrierName = SimProfileReporter.carrierNameForSubscription(context, subscriptionId)
+                if (effectiveSubscriptionId != null) {
+                    payload.put("subscriptionId", effectiveSubscriptionId)
+                    val carrierName = SimProfileReporter.carrierNameForSubscription(context, effectiveSubscriptionId)
                     if (carrierName.isNotBlank()) {
                         payload.put("carrierName", carrierName)
+                    }
+                    val simNumber = SimProfileReporter.phoneNumberForSubscription(context, effectiveSubscriptionId)
+                    if (simNumber.isNotBlank()) {
+                        payload.put("simNumber", simNumber)
                     }
                 }
 
@@ -65,6 +73,8 @@ class CallStateReceiver : BroadcastReceiver() {
                     JSONObject()
                         .put("number", number)
                         .put("answeredAt", iso(answeredAt))
+                        .putOptional("subscriptionId", activeSubscriptionId)
+                        .putOptional("slotIndex", activeSlotIndex)
                 )
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
@@ -73,6 +83,8 @@ class CallStateReceiver : BroadcastReceiver() {
                 if (startedAt == null) {
                     activeNumber = null
                     activeAnsweredAtMillis = null
+                    activeSubscriptionId = null
+                    activeSlotIndex = null
                     return
                 }
 
@@ -90,11 +102,15 @@ class CallStateReceiver : BroadcastReceiver() {
                         .put("endedAt", iso(endedAt))
                         .put("status", status)
                         .put("ringDurationSeconds", ringDurationSeconds)
+                        .putOptional("subscriptionId", activeSubscriptionId)
+                        .putOptional("slotIndex", activeSlotIndex)
                 )
 
                 activeNumber = null
                 activeStartedAtMillis = null
                 activeAnsweredAtMillis = null
+                activeSubscriptionId = null
+                activeSlotIndex = null
             }
         }
     }
@@ -120,6 +136,14 @@ class CallStateReceiver : BroadcastReceiver() {
         return Instant.ofEpochMilli(value ?: System.currentTimeMillis()).toString()
     }
 
+    private fun JSONObject.putOptional(name: String, value: Int?): JSONObject {
+        if (value != null) {
+            put(name, value)
+        }
+
+        return this
+    }
+
     companion object {
         @Volatile
         private var activeNumber: String? = null
@@ -129,5 +153,11 @@ class CallStateReceiver : BroadcastReceiver() {
 
         @Volatile
         private var activeAnsweredAtMillis: Long? = null
+
+        @Volatile
+        private var activeSubscriptionId: Int? = null
+
+        @Volatile
+        private var activeSlotIndex: Int? = null
     }
 }

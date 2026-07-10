@@ -219,12 +219,14 @@ class GatewayWebSocketClient(
                     val profileId = payload.optString("profileId", "default")
                     val subscriptionId = payload.optionalInt("subscriptionId")
                     val slotIndex = payload.optionalInt("slotIndex")
+                    val commandId = payload.optString("commandId", "")
                     val result = try {
                         SmsSender.send(context, to, text, subscriptionId, slotIndex)
                     } catch (error: Exception) {
                         sendEvent(
                             "sms_send_failed",
                             JSONObject()
+                                .put("commandId", commandId)
                                 .put("to", to)
                                 .put("profileId", profileId)
                                 .put("subscriptionId", subscriptionId)
@@ -239,6 +241,7 @@ class GatewayWebSocketClient(
                         sendEvent(
                             "sms_send_submitted",
                             JSONObject()
+                                .put("commandId", commandId)
                                 .put("to", to)
                                 .put("profileId", profileId)
                                 .put("subscriptionId", result.subscriptionId)
@@ -252,6 +255,7 @@ class GatewayWebSocketClient(
                         sendEvent(
                             "sms_send_failed",
                             JSONObject()
+                                .put("commandId", commandId)
                                 .put("to", to)
                                 .put("profileId", profileId)
                                 .put("subscriptionId", subscriptionId)

@@ -40,6 +40,7 @@ export async function forwardIncomingCallTelegram(call: StoredCallLog): Promise<
     "☎️ Incoming Call",
     "",
     `From: ${call.phoneNumber}`,
+    `SIM Number: ${call.simNumber || "-"}`,
     `Time: ${formatTelegramTime(call.startedAt)}`,
     `SIM: ${call.carrierName || call.subscriptionId || "Unknown"}`
   ].join("\n"));
@@ -54,9 +55,10 @@ export async function forwardCallResultTelegram(call: StoredCallLog): Promise<bo
 
   const answered = call.status === "answered";
   await sendTelegramMessage([
-    answered ? "☎️ Call Result" : "☎️ Missed Call",
+    answered ? "Answered Call" : "Missed Call",
     "",
     `From: ${call.phoneNumber}`,
+    `SIM Number: ${call.simNumber || "-"}`,
     `Incoming Time: ${formatTelegramTime(call.startedAt)}`,
     `Answered Time: ${call.answeredAt ? formatTelegramTime(call.answeredAt) : "-"}`,
     `Status: ${answered ? "Answered" : "Missed"}`,

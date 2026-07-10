@@ -82,6 +82,17 @@ object SimProfileReporter {
             .orEmpty()
     }
 
+    fun phoneNumberForSubscription(context: Context, subscriptionId: Int?): String {
+        if (subscriptionId == null || !hasPhoneStatePermission(context)) {
+            return ""
+        }
+
+        return activeSubscriptions(context)
+            .firstOrNull { it.subscriptionId == subscriptionId }
+            ?.let { safePhoneNumber(it) }
+            .orEmpty()
+    }
+
     private fun activeSubscriptions(context: Context): List<SubscriptionInfo> {
         val manager = context.getSystemService(SubscriptionManager::class.java)
 
