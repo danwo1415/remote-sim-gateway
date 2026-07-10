@@ -102,14 +102,20 @@ app.get("/api/device/status", (_req, res) => {
 });
 
 app.get("/api/sim/profiles", (_req, res) => {
+  const refreshResult = sendDeviceCommand("refresh_sim_profiles", {});
+  if (!refreshResult.ok) {
+    console.warn("[sim] refresh_sim_profiles not sent", { reason: refreshResult.error });
+  }
+
+  const profiles = listEnabledSimProfiles();
+  console.log("[sim] profiles requested", {
+    count: profiles.length,
+    deviceRefreshSent: refreshResult.ok
+  });
+
   res.json({
-    defaultProfile: {
-      profileId: DEFAULT_PROFILE_ID,
-      displayName: "默认 SIM",
-      isEnabled: true,
-      isDefaultSms: true
-    },
-    profiles: listEnabledSimProfiles()
+    defaultProfile: null,
+    profiles
   });
 });
 
@@ -159,7 +165,7 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
   const session = getResponseSession(res);
   const to = String(req.body?.to || "").trim();
   const text = String(req.body?.text || "").trim();
-  const profileId = req.body?.profileId ? String(req.body.profileId).trim() : DEFAULT_PROFILE_ID;
+  const profileId = String(req.body?.profileId || "").trim();
 
   console.log("[sms] send request received", {
     source: "web",
@@ -171,6 +177,11 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
 
   if (!to || !text) {
     res.status(400).json({ error: "to_and_text_required" });
+    return;
+  }
+
+  if (!profileId || profileId === DEFAULT_PROFILE_ID) {
+    res.status(400).json({ error: "profile_required" });
     return;
   }
 
@@ -670,6 +681,7 @@ function cancelSmsSendAck(commandId: string): void {
 
 async function handleTelegramWebhook(req: Request, res: Response): Promise<void> {
   if (!config.telegram.botToken || !config.telegram.chatId) {
+    console.warn("[telegram] webhook ignored: bot token or chat id is not configured");
     res.json({ ok: true });
     return;
   }
@@ -679,12 +691,20 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
   const text = typeof message?.text === "string" ? message.text.trim() : "";
   const isKnownCommand = text.startsWith("/send") || text.startsWith("/profiles");
 
+  if (isKnownCommand || isPendingTelegramSelection(chatId, text)) {
+    console.log("[telegram] webhook command received", {
+      chatId,
+      text: text.slice(0, 80)
+    });
+  }
+
   if (!isKnownCommand && !isPendingTelegramSelection(chatId, text)) {
     res.json({ ok: true });
     return;
   }
 
   if (chatId !== config.telegram.chatId) {
+    console.warn("[telegram] command rejected: chat id is not allowed", { chatId });
     audit("telegram_sms_send_rejected", { chatId, reason: "chat_not_allowed" });
     res.json({ ok: true });
     return;
@@ -697,7 +717,8 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
   }
 
   if (text.startsWith("/profiles")) {
-    await sendTelegramReply(formatTelegramProfilesList(buildTelegramProfileOptions()));
+    const profiles = buildTelegramProfileOptions();
+    await sendTelegramReply(profiles.length > 0 ? formatTelegramProfilesList(profiles) : formatNoTelegramProfiles());
     res.json({ ok: true });
     return;
   }
@@ -712,6 +733,12 @@ async function handleTelegramWebhook(req: Request, res: Response): Promise<void>
 
   if (!parsed.profileId) {
     const profiles = buildTelegramProfileOptions();
+    if (profiles.length === 0) {
+      await sendTelegramReply(formatNoTelegramProfiles());
+      res.json({ ok: true });
+      return;
+    }
+
     pendingTelegramSmsSelections.set(chatId, {
       to: parsed.to,
       text: parsed.text,
@@ -776,6 +803,10 @@ function formatTelegramSmsSendError(result: Exclude<SubmitSmsSendResult, { ok: t
     return "Send failed: profile not found. Use /profiles to view available profiles.";
   }
 
+  if (result.error === "profile_required") {
+    return "Send failed: please choose a SIM/Profile first. Use /profiles to view available profiles.";
+  }
+
   if (result.error === "profile_disabled") {
     return "Send failed: profile is disabled. Use /profiles to view available profiles.";
   }
@@ -837,7 +868,7 @@ async function submitTelegramSms(
   ];
 
   if (defaultOnly) {
-    lines.push("Note: only default SIM is available.");
+    lines.push("Note: only one SIM/Profile is currently available.");
   }
 
   await sendTelegramReply(lines.join("\n"));
@@ -849,17 +880,7 @@ function isPendingTelegramSelection(chatId: string, text: string): boolean {
 
 function buildTelegramProfileOptions(): TelegramProfileOption[] {
   const profiles = listEnabledSimProfiles();
-  return [
-    {
-      profileId: DEFAULT_PROFILE_ID,
-      displayName: "Default SIM",
-      carrierName: null,
-      phoneNumber: null,
-      isEnabled: true,
-      isDefaultSms: true
-    },
-    ...profiles.map(mapTelegramProfileOption)
-  ];
+  return profiles.map(mapTelegramProfileOption);
 }
 
 function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
@@ -880,10 +901,6 @@ function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[])
     "",
     "Reply with the number to send."
   ];
-
-  if (profiles.length === 1) {
-    lines.push("", "Current server only has default SIM. Profile selection is reserved.");
-  }
 
   return lines.join("\n");
 }
@@ -909,6 +926,13 @@ function formatTelegramSmsUsageError(): string {
     "/send sms / +13022985056 / message",
     "or:",
     "/send --profile <profileId> +13022985056 message"
+  ].join("\n");
+}
+
+function formatNoTelegramProfiles(): string {
+  return [
+    "No SIM/Profile is available.",
+    "Please open the Android app, grant Phone/SMS permissions, keep it online, then send /profiles again."
   ].join("\n");
 }
 

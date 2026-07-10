@@ -309,9 +309,7 @@
         <div class="form-grid">
           <div class="field">
             <label for="smsProfileSelect">SIM / Profile</label>
-            <select id="smsProfileSelect">
-              <option value="default">默认 SIM</option>
-            </select>
+            <select id="smsProfileSelect"></select>
           </div>
           <div class="field">
             <label for="smsToInput">号码</label>
@@ -687,43 +685,64 @@
 
     function renderSimProfileOptions(profiles) {
       const select = document.getElementById('smsProfileSelect');
-      const previousValue = select.value || 'default';
+      const button = document.getElementById('sendSmsButton');
+      const status = document.getElementById('sendSmsStatus');
+      const previousValue = select.value || '';
+      const enabledProfiles = profiles.filter((profile) => profile.isEnabled);
 
       select.replaceChildren();
-      select.appendChild(new Option('默认 SIM', 'default'));
 
-      for (const profile of profiles) {
-        if (!profile.isEnabled) continue;
+      if (enabledProfiles.length === 0) {
+        select.appendChild(new Option('No SIM/Profile available', ''));
+        select.value = '';
+        button.disabled = true;
+        status.className = 'error';
+        status.textContent = '未识别到可用 SIM/Profile，请确认 Android App 在线并已授予电话/SMS 权限';
+        return;
+      }
 
+      select.appendChild(new Option('请选择 SIM / Profile', ''));
+
+      for (const profile of enabledProfiles) {
         const labelParts = [
           profile.displayName || profile.profileId,
           profile.phoneNumber || '',
           profile.carrierName || ''
         ].filter(Boolean);
 
-        select.appendChild(new Option(labelParts.join(' · '), profile.profileId));
+        select.appendChild(new Option(labelParts.join(' / '), profile.profileId));
       }
 
       const hasPrevious = Array.from(select.options).some((option) => option.value === previousValue);
-      select.value = hasPrevious ? previousValue : 'default';
+      select.value = hasPrevious ? previousValue : '';
+      button.disabled = false;
+      if (status.className === 'error' && status.textContent.includes('SIM/Profile')) {
+        status.textContent = '';
+        status.className = 'muted';
+      }
     }
-
     async function sendSms() {
       const to = document.getElementById('smsToInput').value.trim();
       const text = document.getElementById('smsTextInput').value.trim();
-      const profileId = document.getElementById('smsProfileSelect').value || 'default';
+      const profileId = document.getElementById('smsProfileSelect').value;
       const status = document.getElementById('sendSmsStatus');
 
+      if (!profileId) {
+        status.className = 'error';
+        status.textContent = '请先选择 SIM / Profile';
+        return;
+      }
+
       status.className = 'muted';
-      status.textContent = '正在提交发送';
+      status.textContent = '正在提交发送指令...';
 
       try {
-        const data = await api('/api/sms/send', {
+        await api('/api/sms/send', {
           method: 'POST',
           body: JSON.stringify({ to, text, profileId })
         });
         status.className = 'success';
-        status.textContent = data.note ? '已提交给 Android Gateway（默认 SIM）' : '已提交给 Android Gateway';
+        status.textContent = '发送指令已提交给 Android Gateway';
         document.getElementById('smsTextInput').value = '';
       } catch (error) {
         status.className = 'error';
@@ -733,16 +752,21 @@
           status.textContent = '发送过于频繁，请稍后再试';
         } else if (error.message === 'to_and_text_required') {
           status.textContent = '号码和内容不能为空';
+        } else if (error.message === 'profile_required') {
+          status.textContent = '请先选择 SIM / Profile';
         } else if (error.message === 'profile_not_found') {
-          status.textContent = 'Profile 不存在';
+          status.textContent = 'Profile 不存在，请刷新页面或等待 Android 重新上报';
         } else if (error.message === 'profile_disabled') {
           status.textContent = 'Profile 未启用';
+        } else if (error.message === 'sms_send_ack_timeout') {
+          status.textContent = 'Android 未回传发送结果，请确认已安装最新 APK 并保持在线';
+        } else if (error.message === 'subscription_not_available') {
+          status.textContent = '所选 SIM 当前不可用，请重新选择';
         } else {
-          status.textContent = '发送失败';
+          status.textContent = `发送失败：${error.message}`;
         }
       }
     }
-
     function maybeNotifyNewSms(unreadCount, message = null) {
       if (lastUnreadCount !== null && unreadCount > lastUnreadCount) {
         showSmsNotification(unreadCount, message);

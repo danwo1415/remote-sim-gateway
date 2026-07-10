@@ -362,13 +362,10 @@ export function syncDeviceSimProfiles(deviceId: string, value: unknown): SimProf
 }
 
 export function resolveSmsProfile(profileIdInput: unknown): SmsProfileSelection {
-  const profileId = normalizeOptionalString(profileIdInput) || DEFAULT_PROFILE_ID;
+  const profileId = normalizeOptionalString(profileIdInput);
 
-  if (profileId === DEFAULT_PROFILE_ID) {
-    return {
-      profileId: DEFAULT_PROFILE_ID,
-      note: "profile selection reserved / default SIM used"
-    };
+  if (!profileId || profileId === DEFAULT_PROFILE_ID) {
+    throw new Error("profile_required");
   }
 
   const profile = getSimProfile(profileId);
@@ -413,6 +410,10 @@ function dedupeEnabledProfiles(profiles: SimProfile[]): SimProfile[] {
   const selected = new Map<string, SimProfile>();
 
   for (const profile of profiles) {
+    if (!profile.deviceId) {
+      continue;
+    }
+
     const key = profileDeduplicationKey(profile);
     const existing = selected.get(key);
 
