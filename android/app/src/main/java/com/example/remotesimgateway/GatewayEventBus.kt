@@ -22,13 +22,33 @@ object GatewayEventBus {
         }
     }
 
-    fun sendIncomingSms(context: Context, from: String, body: String, timestamp: Long): Boolean {
+    fun sendIncomingSms(
+        context: Context,
+        from: String,
+        body: String,
+        timestamp: Long,
+        subscriptionId: Int? = null,
+        slotIndex: Int? = null,
+        carrierName: String = "",
+        simNumber: String = ""
+    ): Boolean {
         val appContext = context.applicationContext
         val client = wsClient
         val payload = JSONObject()
             .put("from", from)
             .put("body", body)
             .put("timestamp", timestamp)
+            .putOptional("subscriptionId", subscriptionId)
+            .putOptional("slotIndex", slotIndex)
+
+        if (carrierName.isNotBlank()) {
+            payload.put("carrierName", carrierName)
+        }
+
+        if (simNumber.isNotBlank()) {
+            payload.put("simNumber", simNumber)
+            payload.put("to", simNumber)
+        }
 
         if (client?.sendEvent("incoming_sms", payload) == true) {
             return true
@@ -51,5 +71,13 @@ object GatewayEventBus {
         GatewayServiceStarter.start(appContext)
         Log.w("GatewayEventBus", "$type not sent because gateway is offline")
         return false
+    }
+
+    private fun JSONObject.putOptional(name: String, value: Int?): JSONObject {
+        if (value != null) {
+            put(name, value)
+        }
+
+        return this
     }
 }
