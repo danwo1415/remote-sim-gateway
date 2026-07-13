@@ -22,27 +22,13 @@ export async function forwardIncomingSmsTelegram(message: StoredSmsMessage): Pro
   }
 
   await sendTelegramMessage([
+    "\u2709\uFE0F Incoming SMS",
+    "",
     `From: ${message.from || "unknown"}`,
+    `To: ${message.to || "-"}`,
     `Time: ${formatTelegramTime(message.receivedAt || message.timestamp)}`,
     "",
     message.body || ""
-  ].join("\n"));
-
-  return true;
-}
-
-export async function forwardIncomingCallTelegram(call: StoredCallLog): Promise<boolean> {
-  if (!config.telegram.botToken || !config.telegram.chatId) {
-    return false;
-  }
-
-  await sendTelegramMessage([
-    "☎️ Incoming Call",
-    "",
-    `From: ${call.phoneNumber}`,
-    `SIM Number: ${call.simNumber || "-"}`,
-    `Time: ${formatTelegramTime(call.startedAt)}`,
-    `SIM: ${call.carrierName || call.subscriptionId || "Unknown"}`
   ].join("\n"));
 
   return true;
@@ -55,10 +41,10 @@ export async function forwardCallResultTelegram(call: StoredCallLog): Promise<bo
 
   const answered = call.status === "answered";
   await sendTelegramMessage([
-    answered ? "Answered Call" : "Missed Call",
+    answered ? "\u260E\uFE0F Answered Call" : "\u260E\uFE0F Missed Call",
     "",
     `From: ${call.phoneNumber}`,
-    `SIM Number: ${call.simNumber || "-"}`,
+    `To: ${call.simNumber || "-"}`,
     `Incoming Time: ${formatTelegramTime(call.startedAt)}`,
     `Answered Time: ${call.answeredAt ? formatTelegramTime(call.answeredAt) : "-"}`,
     `Status: ${answered ? "Answered" : "Missed"}`,

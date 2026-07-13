@@ -166,6 +166,7 @@
     }
     .sms-from { color: var(--text); font-weight: 700; }
     .sms-body { white-space: pre-wrap; word-break: break-word; line-height: 1.55; font-size: 14px; }
+    .sent-history-head { margin-top: 18px; }
     .empty { color: var(--muted); padding: 12px 0; }
     .error { color: var(--danger); }
     .success { color: var(--success); }
@@ -324,6 +325,14 @@
           </div>
           <div id="sendSmsStatus" class="muted"></div>
         </div>
+              <div class="section-head sent-history-head">
+          <div>
+            <div class="section-title">发送记录</div>
+            <div id="sentSmsStatus" class="muted">正在读取发送记录</div>
+          </div>
+          <button id="refreshSentSmsButton" class="button" type="button">刷新</button>
+        </div>
+        <div id="sentSmsList" class="sms-list"></div>
       </section>
     </section>
   </main>
@@ -338,6 +347,7 @@
     let browserReconnectTimer = null;
     let browserSocketClosing = false;
     let currentSmsMessages = [];
+    let currentSentSmsMessages = [];
     let currentProfiles = [];
 
     async function api(path, options = {}) {
@@ -390,6 +400,7 @@
       refreshDeviceStatus();
       refreshSmsMessages();
       refreshSimProfiles();
+      refreshSentSmsHistory();
       connectBrowserSocket();
       devicePollTimer = setInterval(refreshDeviceStatus, 3000);
       smsPollTimer = setInterval(refreshSmsMessages, 60000);
@@ -404,6 +415,8 @@
       closeBrowserSocket();
       lastUnreadCount = null;
       currentSmsMessages = [];
+      currentSentSmsMessages = [];
+      renderSentSmsHistory(currentSentSmsMessages);
       currentProfiles = [];
       updateUnreadIndicators(0);
     }
@@ -669,6 +682,89 @@
       }
     }
 
+    async function refreshSentSmsHistory() {
+      if (!authenticated) return;
+
+      const status = document.getElementById('sentSmsStatus');
+      const list = document.getElementById('sentSmsList');
+
+      try {
+        const data = await api('/api/sms/sent?limit=50');
+        currentSentSmsMessages = Array.isArray(data.messages) ? data.messages : [];
+        renderSentSmsHistory(currentSentSmsMessages);
+        status.className = 'muted';
+        status.textContent = currentSentSmsMessages.length ? `最近 ${currentSentSmsMessages.length} 条` : '暂无发送记录';
+      } catch (error) {
+        if (error.status === 401) {
+          setLoggedOut();
+          return;
+        }
+
+        status.className = 'error';
+        status.textContent = '发送记录读取失败';
+        list.replaceChildren();
+      }
+    }
+
+    function renderSentSmsHistory(messages) {
+      const list = document.getElementById('sentSmsList');
+      list.replaceChildren();
+
+      if (messages.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = '暂无发送记录';
+        list.appendChild(empty);
+        return;
+      }
+
+      for (const message of messages) {
+        const item = document.createElement('article');
+        item.className = 'sms-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'sms-meta';
+
+        const target = document.createElement('span');
+        target.className = 'sms-from';
+        target.textContent = `To: ${message.to || '-'}`;
+
+        const time = document.createElement('span');
+        time.textContent = formatSmsTime(message.createdAt);
+
+        const profile = document.createElement('div');
+        profile.className = 'sms-meta';
+
+        const profileText = document.createElement('span');
+        profileText.textContent = `Profile: ${formatSentSmsProfile(message)}`;
+
+        const state = document.createElement('span');
+        state.className = message.status === 'submitted' ? 'success' : 'error';
+        state.textContent = formatSentSmsStatus(message);
+
+        const body = document.createElement('div');
+        body.className = 'sms-body';
+        body.textContent = message.text || '';
+
+        meta.append(target, time);
+        profile.append(profileText, state);
+        item.append(meta, profile, body);
+        list.appendChild(item);
+      }
+    }
+
+    function formatSentSmsProfile(message) {
+      return [
+        message.profileDisplayName || message.profileId || '',
+        message.profilePhoneNumber || '',
+        message.carrierName || ''
+      ].filter(Boolean).join(' / ') || '-';
+    }
+
+    function formatSentSmsStatus(message) {
+      if (message.status === 'submitted') return message.source === 'telegram' ? 'Telegram 已提交' : '网页已提交';
+      return message.error ? `失败：${message.error}` : '失败';
+    }
     async function refreshSimProfiles() {
       if (!authenticated) return;
 
@@ -744,6 +840,7 @@
         status.className = 'success';
         status.textContent = '发送指令已提交给 Android Gateway';
         document.getElementById('smsTextInput').value = '';
+        await refreshSentSmsHistory();
       } catch (error) {
         status.className = 'error';
         if (error.message === 'device_offline' || error.message === 'device_socket_unavailable') {
@@ -766,6 +863,7 @@
           status.textContent = `发送失败：${error.message}`;
         }
 
+        void refreshSentSmsHistory();
         console.error('[sms] send failed', error);
       }
     }
@@ -887,6 +985,7 @@
     document.getElementById('loginChannel').addEventListener('change', syncLoginChannelUi);
     document.getElementById('logoutButton').addEventListener('click', logout);
     document.getElementById('refreshSmsButton').addEventListener('click', refreshSmsMessages);
+    document.getElementById('refreshSentSmsButton').addEventListener('click', refreshSentSmsHistory);
     document.getElementById('backFromSmsButton').addEventListener('click', showHome);
     document.getElementById('backFromSendButton').addEventListener('click', showHome);
     document.getElementById('sendSmsButton').addEventListener('click', sendSms);
@@ -897,6 +996,7 @@
     wireModuleAction('sendSmsModule', () => {
       showPanel('send');
       void refreshSimProfiles();
+      void refreshSentSmsHistory();
     });
 
     syncLoginChannelUi();

@@ -20,6 +20,7 @@ import {
   DEFAULT_PROFILE_ID,
   type SimProfile,
   findDeviceSimProfile,
+  getSimProfile,
   listEnabledSimProfiles,
   resolveSmsProfile,
   syncDeviceSimProfiles,
@@ -32,6 +33,11 @@ import {
   parseSmsLimit,
   saveIncomingSms
 } from "./smsStore.js";
+import {
+  listSmsSendLogs,
+  parseSmsSendLogLimit,
+  saveSmsSendLog
+} from "./sentSmsStore.js";
 import {
   forwardCallResultTelegram,
   forwardIncomingSmsTelegram,
@@ -145,6 +151,14 @@ app.get("/api/sms", (req, res) => {
   res.json({
     count: messages.length,
     unreadCount: getUnreadSmsCount(),
+    messages
+  });
+});
+
+app.get("/api/sms/sent", (req, res) => {
+  const messages = listSmsSendLogs(parseSmsSendLogLimit(req.query.limit));
+  res.json({
+    count: messages.length,
     messages
   });
 });
@@ -427,17 +441,19 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       }
 
       if (type === "incoming_sms") {
-        const savedSms = saveIncomingSms(deviceId, payload);
+        const smsPayload = enrichSmsPayloadWithSimProfile(deviceId, payload);
+        const savedSms = saveIncomingSms(deviceId, smsPayload);
         const unreadCount = getUnreadSmsCount();
 
         console.log("========== INCOMING SMS ==========");
         console.log(`Saved ID: ${savedSms.id}`);
-        console.log(`From: ${payload.from || "unknown"}`);
-        console.log(`Timestamp: ${payload.timestamp || ""}`);
-        console.log(`Body: ${payload.body || ""}`);
+        console.log(`From: ${smsPayload.from || "unknown"}`);
+        console.log(`To: ${savedSms.to || ""}`);
+        console.log(`Timestamp: ${smsPayload.timestamp || ""}`);
+        console.log(`Body: ${smsPayload.body || ""}`);
         console.log("==================================");
 
-        void forwardIncomingSmsEmail(deviceId, payload)
+        void forwardIncomingSmsEmail(deviceId, smsPayload)
           .then((sent) => {
             if (sent) {
               console.log("[mail] incoming SMS forwarded");
@@ -547,10 +563,12 @@ type PendingTelegramSmsSelection = {
 };
 
 async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendResult> {
-  let profile;
+  let profile: ReturnType<typeof resolveSmsProfile>;
+  let profileDetails: SimProfile | null = null;
 
   try {
     profile = resolveSmsProfile(input.profileId);
+    profileDetails = getSimProfile(profile.profileId);
   } catch (error) {
     const message = getErrorMessage(error);
     audit("sms_send_failed", {
@@ -559,6 +577,10 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
       to: input.to,
       profileId: input.profileId,
       reason: message
+    });
+    recordSmsSendHistory(input, input.profileId || null, null, {
+      status: "failed",
+      error: message
     });
     return { ok: false, status: 400, error: message };
   }
@@ -575,6 +597,12 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
       to: input.to,
       profileId: profile.profileId,
       retryAfterSeconds
+    });
+    recordSmsSendHistory(input, profile.profileId, profileDetails, {
+      status: "failed",
+      error: "sms_send_rate_limited",
+      subscriptionId: profile.subscriptionId,
+      slotIndex: profile.slotIndex ?? null
     });
     return {
       ok: false,
@@ -606,6 +634,12 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
       profileId: profile.profileId,
       reason: result.error
     });
+    recordSmsSendHistory(input, profile.profileId, profileDetails, {
+      status: "failed",
+      error: result.error,
+      subscriptionId: profile.subscriptionId,
+      slotIndex: profile.slotIndex ?? null
+    });
     return result;
   }
 
@@ -621,6 +655,13 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
       profileId: profile.profileId,
       deviceId: result.deviceId,
       reason: error
+    });
+    recordSmsSendHistory(input, profile.profileId, profileDetails, {
+      status: "failed",
+      error,
+      deviceId: result.deviceId,
+      subscriptionId: firstText(ack.subscriptionId, profile.subscriptionId),
+      slotIndex: profile.slotIndex ?? null
     });
     return {
       ok: false,
@@ -638,6 +679,12 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
     note: profile.note,
     commandId
   });
+  recordSmsSendHistory(input, profile.profileId, profileDetails, {
+    status: "submitted",
+    deviceId: result.deviceId,
+    subscriptionId: firstText(ack.subscriptionId, profile.subscriptionId),
+    slotIndex: profile.slotIndex ?? null
+  });
 
   return {
     ok: true,
@@ -645,6 +692,39 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
     profileId: profile.profileId,
     note: profile.note
   };
+}
+
+function recordSmsSendHistory(
+  input: SubmitSmsSendInput,
+  profileId: string | null,
+  profile: SimProfile | null,
+  details: {
+    status: "submitted" | "failed";
+    error?: string | null;
+    deviceId?: string | null;
+    subscriptionId?: string | number | null;
+    slotIndex?: number | null;
+  }
+): void {
+  try {
+    saveSmsSendLog({
+      source: input.source,
+      actor: input.actorLabel,
+      to: input.to,
+      text: input.text,
+      profileId,
+      profileDisplayName: profile?.displayName ?? null,
+      profilePhoneNumber: profile?.phoneNumber ?? null,
+      carrierName: profile?.carrierName ?? null,
+      deviceId: details.deviceId ?? null,
+      subscriptionId: details.subscriptionId ?? profile?.subscriptionId ?? null,
+      slotIndex: details.slotIndex ?? profile?.slotIndex ?? null,
+      status: details.status,
+      error: details.error ?? null
+    });
+  } catch (error) {
+    console.error("[sms] failed to record send history", error);
+  }
 }
 
 function waitForSmsSendAck(commandId: string): Promise<SmsSendAck> {
@@ -1055,6 +1135,24 @@ function broadcastBrowserEvent(type: string, payload: Record<string, unknown>): 
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function enrichSmsPayloadWithSimProfile(
+  deviceId: string,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const profile = findDeviceSimProfile(deviceId, payload);
+  if (!profile) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
+    slotIndex: payload.slotIndex ?? profile.slotIndex,
+    carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
+    to: firstText(payload.to, payload.toNumber, payload.simNumber, profile.phoneNumber)
+  };
 }
 
 function enrichCallPayloadWithSimProfile(

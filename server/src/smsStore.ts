@@ -2,6 +2,9 @@ import { db } from "./db.js";
 
 type SmsPayload = {
   from?: unknown;
+  to?: unknown;
+  toNumber?: unknown;
+  simNumber?: unknown;
   body?: unknown;
   timestamp?: unknown;
   queuedAt?: unknown;
@@ -11,6 +14,7 @@ type SmsRow = {
   id: number;
   device_id: string;
   sender: string;
+  recipient_number: string | null;
   body: string;
   phone_timestamp: number | null;
   received_at: string;
@@ -23,6 +27,7 @@ export type StoredSmsMessage = {
   id: number;
   deviceId: string;
   from: string;
+  to: string | null;
   body: string;
   timestamp: number | null;
   receivedAt: string;
@@ -37,6 +42,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
     sender TEXT NOT NULL,
+    recipient_number TEXT,
     body TEXT NOT NULL,
     phone_timestamp INTEGER,
     received_at TEXT NOT NULL,
@@ -53,11 +59,13 @@ db.exec(`
 `);
 
 ensureColumn("sms_messages", "read_at", "TEXT");
+ensureColumn("sms_messages", "recipient_number", "TEXT");
 
 const insertSmsStatement = db.prepare(`
   INSERT INTO sms_messages (
     device_id,
     sender,
+    recipient_number,
     body,
     phone_timestamp,
     received_at,
@@ -68,6 +76,7 @@ const insertSmsStatement = db.prepare(`
   VALUES (
     @deviceId,
     @sender,
+    @recipientNumber,
     @body,
     @phoneTimestamp,
     @receivedAt,
@@ -82,6 +91,7 @@ const listSmsStatement = db.prepare(`
     id,
     device_id,
     sender,
+    recipient_number,
     body,
     phone_timestamp,
     received_at,
@@ -98,6 +108,7 @@ const getSmsStatement = db.prepare(`
     id,
     device_id,
     sender,
+    recipient_number,
     body,
     phone_timestamp,
     received_at,
@@ -130,6 +141,7 @@ export function saveIncomingSms(deviceId: string, payload: SmsPayload): StoredSm
   const result = insertSmsStatement.run({
     deviceId,
     sender: stringify(payload.from, "unknown"),
+    recipientNumber: optionalString(payload.to) ?? optionalString(payload.toNumber) ?? optionalString(payload.simNumber),
     body: stringify(payload.body, ""),
     phoneTimestamp,
     receivedAt,
@@ -179,6 +191,7 @@ function mapSmsRow(row: SmsRow): StoredSmsMessage {
     id: row.id,
     deviceId: row.device_id,
     from: row.sender,
+    to: row.recipient_number,
     body: row.body,
     timestamp: row.phone_timestamp,
     receivedAt: row.received_at,
@@ -204,6 +217,15 @@ function stringify(value: unknown, fallback: string): string {
   }
 
   return String(value);
+}
+
+function optionalString(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
 }
 
 function normalizeTimestamp(value: unknown): number | null {
