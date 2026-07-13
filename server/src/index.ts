@@ -246,7 +246,7 @@ server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url || "/", "http://localhost");
 
   if (url.pathname === "/ws/browser") {
-    const session = getRequestSession(req, true);
+    const session = getRequestSession(req, false);
 
     if (!session) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");

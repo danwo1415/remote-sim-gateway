@@ -213,7 +213,7 @@ export function logout(req: Request, res: Response): void {
 }
 
 export function sessionStatus(req: Request, res: Response): void {
-  const session = getRequestSession(req, true);
+  const session = getRequestSession(req, false);
 
   if (!session) {
     res.status(401).json({ authenticated: false });
@@ -228,7 +228,7 @@ export function sessionStatus(req: Request, res: Response): void {
 }
 
 export function requireSession(req: Request, res: Response, next: NextFunction): void {
-  const session = getRequestSession(req, true);
+  const session = getRequestSession(req, false);
 
   if (!session) {
     res.status(401).json({ error: "unauthorized" });

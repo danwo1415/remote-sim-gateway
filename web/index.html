@@ -343,6 +343,7 @@
     let lastUnreadCount = null;
     let smsPollTimer = null;
     let devicePollTimer = null;
+    let sessionExpiryTimer = null;
     let browserSocket = null;
     let browserReconnectTimer = null;
     let browserSocketClosing = false;
@@ -381,13 +382,13 @@
     async function checkSession() {
       try {
         const data = await api('/api/auth/session');
-        setAuthenticated(data.email);
+        setAuthenticated(data.email, data.expiresAt);
       } catch {
         setLoggedOut();
       }
     }
 
-    function setAuthenticated(email) {
+    function setAuthenticated(email, expiresAt) {
       authenticated = true;
       document.getElementById('loginPanel').classList.add('hidden');
       document.getElementById('mainApp').classList.remove('hidden');
@@ -404,6 +405,17 @@
       connectBrowserSocket();
       devicePollTimer = setInterval(refreshDeviceStatus, 3000);
       smsPollTimer = setInterval(refreshSmsMessages, 60000);
+      scheduleSessionExpiry(expiresAt);
+    }
+
+    function scheduleSessionExpiry(expiresAt) {
+      clearTimeout(sessionExpiryTimer);
+      if (!expiresAt) return;
+
+      const delay = new Date(expiresAt).getTime() - Date.now();
+      sessionExpiryTimer = setTimeout(() => {
+        setLoggedOut();
+      }, Math.max(0, delay));
     }
 
     function setLoggedOut() {
@@ -412,6 +424,7 @@
       document.getElementById('loginPanel').classList.remove('hidden');
       clearInterval(devicePollTimer);
       clearInterval(smsPollTimer);
+      clearTimeout(sessionExpiryTimer);
       closeBrowserSocket();
       lastUnreadCount = null;
       currentSmsMessages = [];
@@ -528,7 +541,7 @@
           body: JSON.stringify({ email, code, channel })
         });
         status.textContent = '';
-        setAuthenticated(data.email);
+        setAuthenticated(data.email, data.expiresAt);
       } catch (error) {
         status.className = 'error';
         status.textContent = authErrorText(error);
