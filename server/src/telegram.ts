@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import type { StoredCallLog } from "./callStore.js";
 import type { StoredSmsMessage } from "./smsStore.js";
+import { getDeviceDisplayName } from "./deviceStore.js";
 
 export async function sendLoginCodeTelegram(code: string): Promise<void> {
   if (!config.telegram.botToken || !config.telegram.chatId) {

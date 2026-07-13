@@ -5,6 +5,7 @@ type SmsPayload = {
   to?: unknown;
   toNumber?: unknown;
   simNumber?: unknown;
+  profileId?: unknown;
   body?: unknown;
   timestamp?: unknown;
   queuedAt?: unknown;
@@ -15,6 +16,7 @@ type SmsRow = {
   device_id: string;
   sender: string;
   recipient_number: string | null;
+  profile_id: string | null;
   body: string;
   phone_timestamp: number | null;
   received_at: string;
@@ -28,6 +30,7 @@ export type StoredSmsMessage = {
   deviceId: string;
   from: string;
   to: string | null;
+  profileId: string | null;
   body: string;
   timestamp: number | null;
   receivedAt: string;
@@ -43,6 +46,7 @@ db.exec(`
     device_id TEXT NOT NULL,
     sender TEXT NOT NULL,
     recipient_number TEXT,
+    profile_id TEXT,
     body TEXT NOT NULL,
     phone_timestamp INTEGER,
     received_at TEXT NOT NULL,
@@ -60,12 +64,14 @@ db.exec(`
 
 ensureColumn("sms_messages", "read_at", "TEXT");
 ensureColumn("sms_messages", "recipient_number", "TEXT");
+ensureColumn("sms_messages", "profile_id", "TEXT");
 
 const insertSmsStatement = db.prepare(`
   INSERT INTO sms_messages (
     device_id,
     sender,
     recipient_number,
+    profile_id,
     body,
     phone_timestamp,
     received_at,
@@ -77,6 +83,7 @@ const insertSmsStatement = db.prepare(`
     @deviceId,
     @sender,
     @recipientNumber,
+    @profileId,
     @body,
     @phoneTimestamp,
     @receivedAt,
@@ -92,6 +99,7 @@ const listSmsStatement = db.prepare(`
     device_id,
     sender,
     recipient_number,
+    profile_id,
     body,
     phone_timestamp,
     received_at,
@@ -103,12 +111,32 @@ const listSmsStatement = db.prepare(`
   LIMIT @limit
 `);
 
+const listSmsByDeviceStatement = db.prepare(`
+  SELECT
+    id,
+    device_id,
+    sender,
+    recipient_number,
+    profile_id,
+    body,
+    phone_timestamp,
+    received_at,
+    queued_at,
+    read_at,
+    created_at
+  FROM sms_messages
+  WHERE device_id = @deviceId
+  ORDER BY received_at DESC, id DESC
+  LIMIT @limit
+`);
+
 const getSmsStatement = db.prepare(`
   SELECT
     id,
     device_id,
     sender,
     recipient_number,
+    profile_id,
     body,
     phone_timestamp,
     received_at,
@@ -125,10 +153,22 @@ const unreadCountStatement = db.prepare(`
   WHERE read_at IS NULL
 `);
 
+const unreadCountByDeviceStatement = db.prepare(`
+  SELECT COUNT(*) AS count
+  FROM sms_messages
+  WHERE read_at IS NULL AND device_id = @deviceId
+`);
+
 const markAllReadStatement = db.prepare(`
   UPDATE sms_messages
   SET read_at = @readAt
   WHERE read_at IS NULL
+`);
+
+const markAllReadByDeviceStatement = db.prepare(`
+  UPDATE sms_messages
+  SET read_at = @readAt
+  WHERE read_at IS NULL AND device_id = @deviceId
 `);
 
 export function saveIncomingSms(deviceId: string, payload: SmsPayload): StoredSmsMessage {
@@ -142,6 +182,7 @@ export function saveIncomingSms(deviceId: string, payload: SmsPayload): StoredSm
     deviceId,
     sender: stringify(payload.from, "unknown"),
     recipientNumber: optionalString(payload.to) ?? optionalString(payload.toNumber) ?? optionalString(payload.simNumber),
+    profileId: optionalString(payload.profileId),
     body: stringify(payload.body, ""),
     phoneTimestamp,
     receivedAt,
@@ -157,19 +198,28 @@ export function saveIncomingSms(deviceId: string, payload: SmsPayload): StoredSm
   return mapSmsRow(row);
 }
 
-export function listSmsMessages(limit = 100): StoredSmsMessage[] {
+export function listSmsMessages(limit = 100, deviceId?: string | null): StoredSmsMessage[] {
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 500);
-  const rows = listSmsStatement.all({ limit: boundedLimit }) as SmsRow[];
+  const normalizedDeviceId = optionalString(deviceId);
+  const rows = normalizedDeviceId
+    ? listSmsByDeviceStatement.all({ limit: boundedLimit, deviceId: normalizedDeviceId }) as SmsRow[]
+    : listSmsStatement.all({ limit: boundedLimit }) as SmsRow[];
   return rows.map(mapSmsRow);
 }
 
-export function getUnreadSmsCount(): number {
-  const row = unreadCountStatement.get() as { count: number };
+export function getUnreadSmsCount(deviceId?: string | null): number {
+  const normalizedDeviceId = optionalString(deviceId);
+  const row = normalizedDeviceId
+    ? unreadCountByDeviceStatement.get({ deviceId: normalizedDeviceId }) as { count: number }
+    : unreadCountStatement.get() as { count: number };
   return row.count;
 }
 
-export function markAllSmsRead(): number {
-  const result = markAllReadStatement.run({ readAt: new Date().toISOString() });
+export function markAllSmsRead(deviceId?: string | null): number {
+  const normalizedDeviceId = optionalString(deviceId);
+  const result = normalizedDeviceId
+    ? markAllReadByDeviceStatement.run({ readAt: new Date().toISOString(), deviceId: normalizedDeviceId })
+    : markAllReadStatement.run({ readAt: new Date().toISOString() });
   return result.changes;
 }
 
@@ -192,6 +242,7 @@ function mapSmsRow(row: SmsRow): StoredSmsMessage {
     deviceId: row.device_id,
     from: row.sender,
     to: row.recipient_number,
+    profileId: row.profile_id,
     body: row.body,
     timestamp: row.phone_timestamp,
     receivedAt: row.received_at,

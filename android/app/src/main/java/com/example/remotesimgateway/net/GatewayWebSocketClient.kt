@@ -1,6 +1,7 @@
 package com.example.remotesimgateway.net
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -70,6 +71,7 @@ class GatewayWebSocketClient(
                 .url(serverUrl)
                 .addHeader("X-Device-Id", deviceId)
                 .addHeader("X-Device-Key", deviceKey)
+                .addHeader("X-Device-Model", Build.MODEL ?: "Android")
                 .build()
 
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -80,7 +82,7 @@ class GatewayWebSocketClient(
                     reconnectAttempts = 0
                     Log.i("GatewayWS", "Connected")
                     updateStatus("Connected\n$serverUrl")
-                    sendEvent("device_online", JSONObject().put("deviceId", deviceId))
+                    sendEvent("device_online", JSONObject().put("deviceId", deviceId).put("deviceModel", Build.MODEL ?: "Android"))
                     sendSimProfiles()
                     scheduleSimProfileRefresh()
                     flushQueuedSms()

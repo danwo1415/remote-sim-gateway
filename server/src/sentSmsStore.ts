@@ -137,6 +137,29 @@ const listSmsSendLogsStatement = db.prepare(`
   LIMIT @limit
 `);
 
+const listSmsSendLogsByDeviceStatement = db.prepare(`
+  SELECT
+    id,
+    source,
+    actor,
+    to_number,
+    body,
+    profile_id,
+    profile_display_name,
+    profile_phone_number,
+    carrier_name,
+    device_id,
+    subscription_id,
+    slot_index,
+    status,
+    error,
+    created_at
+  FROM sms_send_logs
+  WHERE device_id = @deviceId
+  ORDER BY created_at DESC, id DESC
+  LIMIT @limit
+`);
+
 const getSmsSendLogStatement = db.prepare(`
   SELECT
     id,
@@ -187,9 +210,12 @@ export function saveSmsSendLog(input: SmsSendLogInput): StoredSmsSendLog {
   return mapSmsSendLogRow(row);
 }
 
-export function listSmsSendLogs(limit = 50): StoredSmsSendLog[] {
+export function listSmsSendLogs(limit = 50, deviceId?: string | null): StoredSmsSendLog[] {
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
-  const rows = listSmsSendLogsStatement.all({ limit: boundedLimit }) as SmsSendLogRow[];
+  const normalizedDeviceId = normalizeOptionalString(deviceId);
+  const rows = normalizedDeviceId
+    ? listSmsSendLogsByDeviceStatement.all({ limit: boundedLimit, deviceId: normalizedDeviceId }) as SmsSendLogRow[]
+    : listSmsSendLogsStatement.all({ limit: boundedLimit }) as SmsSendLogRow[];
   return rows.map(mapSmsSendLogRow);
 }
 
@@ -204,6 +230,15 @@ export function parseSmsSendLogLimit(value: unknown): number {
   }
 
   return parsed;
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
 }
 
 function mapSmsSendLogRow(row: SmsSendLogRow): StoredSmsSendLog {

@@ -275,6 +275,13 @@ export function listEnabledSimProfiles(): SimProfile[] {
   return dedupeEnabledProfiles(profiles);
 }
 
+export function listEnabledSimProfilesByDevice(deviceId: string): SimProfile[] {
+  const profiles = (listProfilesByDeviceStatement.all({ deviceId }) as SimProfileRow[])
+    .map(mapProfileRow)
+    .filter((profile) => profile.isEnabled);
+  return dedupeEnabledProfiles(profiles);
+}
+
 export function getSimProfile(profileId: string): SimProfile | null {
   const row = getProfileStatement.get({ profileId }) as SimProfileRow | undefined;
   return row ? mapProfileRow(row) : null;
@@ -386,6 +393,17 @@ export function resolveSmsProfile(profileIdInput: unknown): SmsProfileSelection 
   };
 }
 
+export function resolveSmsProfileForDevice(deviceId: string, profileIdInput: unknown): SmsProfileSelection {
+  const selection = resolveSmsProfile(profileIdInput);
+  const profile = getSimProfile(selection.profileId);
+
+  if (!profile || profile.deviceId !== deviceId) {
+    throw new Error("profile_not_found");
+  }
+
+  return selection;
+}
+
 export function findDeviceSimProfile(
   deviceId: string,
   input: { profileId?: unknown; subscriptionId?: unknown; slotIndex?: unknown }
@@ -468,24 +486,26 @@ function dedupeEnabledProfiles(profiles: SimProfile[]): SimProfile[] {
 }
 
 function profileDeduplicationKey(profile: SimProfile): string {
+  const devicePrefix = profile.deviceId ? `device:${profile.deviceId}:` : "";
+
   if (profile.iccId) {
-    return `icc:${profile.iccId}`;
+    return `${devicePrefix}icc:${profile.iccId}`;
   }
 
   if (profile.phoneNumber) {
-    return `phone:${profile.phoneNumber}`;
+    return `${devicePrefix}phone:${profile.phoneNumber}`;
   }
 
   if (profile.subscriptionId) {
-    return `subscription:${profile.subscriptionId}`;
+    return `${devicePrefix}subscription:${profile.subscriptionId}`;
   }
 
   const carrierName = profile.carrierName || "";
   if (carrierName && profile.slotIndex !== null) {
-    return `slot:${profile.slotIndex}:${carrierName}`;
+    return `${devicePrefix}slot:${profile.slotIndex}:${carrierName}`;
   }
 
-  return `profile:${profile.profileId}`;
+  return `${devicePrefix}profile:${profile.profileId}`;
 }
 
 function shouldPreferProfile(candidate: SimProfile, existing: SimProfile): boolean {

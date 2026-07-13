@@ -155,6 +155,9 @@
       background: #fff;
     }
     .sms-item.unread { border-color: var(--primary); }
+    .device-list { display: grid; gap: 10px; }
+    .device-item { text-align: left; cursor: pointer; }
+    .device-item.selected { border-color: var(--primary); }
     .sms-meta {
       display: flex;
       justify-content: space-between;
@@ -244,9 +247,22 @@
       </section>
 
       <section class="card">
-        <div class="status-line"><strong>Device ID：</strong><span id="deviceId" class="muted">-</span></div>
-        <div class="status-line"><strong>Connected At：</strong><span id="connectedAt" class="muted">-</span></div>
-        <div class="status-line"><strong>Last Seen：</strong><span id="lastSeenAt" class="muted">-</span></div>
+        <div class="status-line"><strong>Selected Device:</strong><span id="selectedDeviceName" class="muted">-</span></div>
+        <div class="status-line"><strong>Device ID:</strong><span id="deviceId" class="muted">-</span></div>
+        <div class="status-line"><strong>Connected At:</strong><span id="connectedAt" class="muted">-</span></div>
+        <div class="status-line"><strong>Last Seen:</strong><span id="lastSeenAt" class="muted">-</span></div>
+        <div class="actions"><button id="changeDeviceButton" class="button" type="button">Change Device</button></div>
+      </section>
+
+      <section id="deviceChooserPanel" class="card hidden">
+        <div class="section-head">
+          <div>
+            <div class="section-title">Select Device</div>
+            <div id="deviceChooserStatus" class="muted">Loading devices</div>
+          </div>
+          <button id="refreshDevicesButton" class="button" type="button">Refresh</button>
+        </div>
+        <div id="deviceList" class="device-list"></div>
       </section>
 
       <section id="moduleHome" class="grid">
@@ -350,6 +366,8 @@
     let currentSmsMessages = [];
     let currentSentSmsMessages = [];
     let currentProfiles = [];
+    let currentDevices = [];
+    let selectedDeviceId = localStorage.getItem('rsg_selected_device_id') || '';
 
     async function api(path, options = {}) {
       const res = await fetch(path, {
@@ -396,14 +414,11 @@
       clearInterval(devicePollTimer);
       clearInterval(smsPollTimer);
       closeBrowserSocket();
-      showHome();
+      showDeviceChooser();
       requestNotificationPermission();
-      refreshDeviceStatus();
-      refreshSmsMessages();
-      refreshSimProfiles();
-      refreshSentSmsHistory();
+      refreshDevices();
       connectBrowserSocket();
-      devicePollTimer = setInterval(refreshDeviceStatus, 3000);
+      devicePollTimer = setInterval(refreshDevices, 3000);
       smsPollTimer = setInterval(refreshSmsMessages, 60000);
       scheduleSessionExpiry(expiresAt);
     }
@@ -431,6 +446,7 @@
       currentSentSmsMessages = [];
       renderSentSmsHistory(currentSentSmsMessages);
       currentProfiles = [];
+      currentDevices = [];
       updateUnreadIndicators(0);
     }
 
@@ -481,7 +497,15 @@
         return;
       }
 
+      if (message.type === 'devices_updated') {
+        currentDevices = Array.isArray(message.payload?.devices) ? message.payload.devices : [];
+        renderDeviceList(currentDevices);
+        updateSelectedDeviceDisplay();
+        return;
+      }
+
       if (message.type === 'sim_profiles_updated') {
+        if (message.payload?.deviceId && message.payload.deviceId !== selectedDeviceId) return;
         const profiles = Array.isArray(message.payload?.profiles) ? message.payload.profiles : [];
         currentProfiles = profiles;
         renderSimProfileOptions(currentProfiles);
@@ -492,12 +516,10 @@
 
       const payload = message.payload || {};
       const sms = payload.message;
+      if (!sms || sms.deviceId !== selectedDeviceId) return;
+
       const unreadCount = Number(payload.unreadCount || 0);
-
-      if (sms) {
-        upsertSmsMessage(sms);
-      }
-
+      upsertSmsMessage(sms);
       updateSmsSummary();
       maybeNotifyNewSms(unreadCount, sms);
       updateUnreadIndicators(unreadCount);
@@ -578,17 +600,22 @@
       emailLabel.textContent = isTelegram ? '邮箱（Telegram 不需要）' : '邮箱';
     }
 
-    async function refreshDeviceStatus() {
+    async function refreshDevices() {
       if (!authenticated) return;
 
       try {
-        const data = await api('/api/device/status');
-        const online = Boolean(data.online);
-        document.getElementById('deviceDot').classList.toggle('online', online);
-        document.getElementById('deviceText').textContent = online ? 'Device Online' : 'Device Offline';
-        document.getElementById('deviceId').textContent = data.deviceId || '-';
-        document.getElementById('connectedAt').textContent = data.connectedAt || '-';
-        document.getElementById('lastSeenAt').textContent = data.lastSeenAt || '-';
+        const data = await api('/api/devices');
+        currentDevices = Array.isArray(data.devices) ? data.devices : [];
+        renderDeviceList(currentDevices);
+
+        const selected = currentDevices.find((device) => device.deviceId === selectedDeviceId);
+        if (!selected && selectedDeviceId) {
+          selectedDeviceId = '';
+          localStorage.removeItem('rsg_selected_device_id');
+          showDeviceChooser();
+        }
+
+        updateSelectedDeviceDisplay();
       } catch (error) {
         if (error.status === 401) {
           setLoggedOut();
@@ -600,15 +627,77 @@
       }
     }
 
+    function renderDeviceList(devices) {
+      const list = document.getElementById('deviceList');
+      const status = document.getElementById('deviceChooserStatus');
+      list.replaceChildren();
+
+      if (devices.length === 0) {
+        status.textContent = 'No Android Gateway device is available';
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Open the Android app and keep it online.';
+        list.appendChild(empty);
+        return;
+      }
+
+      status.textContent = `${devices.length} device(s)`;
+      for (const device of devices) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = device.deviceId === selectedDeviceId ? 'sms-item device-item selected' : 'sms-item device-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'sms-meta';
+
+        const name = document.createElement('span');
+        name.className = 'sms-from';
+        name.textContent = device.displayName || device.deviceId;
+
+        const state = document.createElement('span');
+        state.className = device.online ? 'success' : 'error';
+        state.textContent = device.online ? 'Online' : 'Offline';
+
+        const detail = document.createElement('div');
+        detail.className = 'muted';
+        detail.textContent = `ID: ${device.deviceId} / Last Seen: ${device.lastSeenAt || '-'}`;
+
+        meta.append(name, state);
+        item.append(meta, detail);
+        item.addEventListener('click', () => selectDevice(device.deviceId));
+        list.appendChild(item);
+      }
+    }
+
+    function selectDevice(deviceId) {
+      selectedDeviceId = deviceId;
+      localStorage.setItem('rsg_selected_device_id', selectedDeviceId);
+      updateSelectedDeviceDisplay();
+      showHome();
+      refreshSmsMessages();
+      refreshSimProfiles();
+      refreshSentSmsHistory();
+    }
+
+    function updateSelectedDeviceDisplay() {
+      const selected = currentDevices.find((device) => device.deviceId === selectedDeviceId);
+      const online = Boolean(selected?.online);
+      document.getElementById('deviceDot').classList.toggle('online', online);
+      document.getElementById('deviceText').textContent = selected ? (online ? 'Device Online' : 'Device Offline') : 'Select Device';
+      document.getElementById('selectedDeviceName').textContent = selected?.displayName || '-';
+      document.getElementById('deviceId').textContent = selected?.deviceId || '-';
+      document.getElementById('connectedAt').textContent = selected?.connectedAt || '-';
+      document.getElementById('lastSeenAt').textContent = selected?.lastSeenAt || '-';
+    }
     async function refreshSmsMessages() {
-      if (!authenticated) return;
+      if (!authenticated || !selectedDeviceId) return;
 
       const smsSummary = document.getElementById('smsSummary');
       const smsListStatus = document.getElementById('smsListStatus');
       const smsList = document.getElementById('smsList');
 
       try {
-        const data = await api('/api/sms?limit=50');
+        const data = await api(`/api/sms?limit=50&deviceId=${encodeURIComponent(selectedDeviceId)}`);
         const messages = Array.isArray(data.messages) ? data.messages : [];
         const unreadCount = Number(data.unreadCount || 0);
 
@@ -687,7 +776,7 @@
 
     async function markSmsRead() {
       try {
-        const data = await api('/api/sms/mark-read', { method: 'POST', body: '{}' });
+        const data = await api('/api/sms/mark-read', { method: 'POST', body: JSON.stringify({ deviceId: selectedDeviceId }) });
         updateUnreadIndicators(Number(data.unreadCount || 0));
         await refreshSmsMessages();
       } catch (error) {
@@ -696,13 +785,13 @@
     }
 
     async function refreshSentSmsHistory() {
-      if (!authenticated) return;
+      if (!authenticated || !selectedDeviceId) return;
 
       const status = document.getElementById('sentSmsStatus');
       const list = document.getElementById('sentSmsList');
 
       try {
-        const data = await api('/api/sms/sent?limit=50');
+        const data = await api(`/api/sms/sent?limit=50&deviceId=${encodeURIComponent(selectedDeviceId)}`);
         currentSentSmsMessages = Array.isArray(data.messages) ? data.messages : [];
         renderSentSmsHistory(currentSentSmsMessages);
         status.className = 'muted';
@@ -779,10 +868,10 @@
       return message.error ? `失败：${message.error}` : '失败';
     }
     async function refreshSimProfiles() {
-      if (!authenticated) return;
+      if (!authenticated || !selectedDeviceId) return;
 
       try {
-        const data = await api('/api/sim/profiles');
+        const data = await api(`/api/sim/profiles?deviceId=${encodeURIComponent(selectedDeviceId)}`);
         currentProfiles = Array.isArray(data.profiles) ? data.profiles : [];
         renderSimProfileOptions(currentProfiles);
       } catch (error) {
@@ -836,6 +925,13 @@
       const profileId = document.getElementById('smsProfileSelect').value;
       const status = document.getElementById('sendSmsStatus');
 
+      if (!selectedDeviceId) {
+        status.className = 'error';
+        status.textContent = 'Please choose a Device first';
+        showDeviceChooser();
+        return;
+      }
+
       if (!profileId) {
         status.className = 'error';
         status.textContent = '请先选择 SIM / Profile';
@@ -848,7 +944,7 @@
       try {
         await api('/api/sms/send', {
           method: 'POST',
-          body: JSON.stringify({ to, text, profileId })
+          body: JSON.stringify({ deviceId: selectedDeviceId, to, text, profileId })
         });
         status.className = 'success';
         status.textContent = '发送指令已提交给 Android Gateway';
@@ -856,7 +952,9 @@
         await refreshSentSmsHistory();
       } catch (error) {
         status.className = 'error';
-        if (error.message === 'device_offline' || error.message === 'device_socket_unavailable') {
+        if (error.message === 'device_required') {
+          status.textContent = 'Please choose a Device first';
+        } else if (error.message === 'device_offline' || error.message === 'device_socket_unavailable') {
           status.textContent = 'Android Gateway 离线';
         } else if (error.message === 'sms_send_rate_limited') {
           status.textContent = '发送过于频繁，请稍后再试';
@@ -968,7 +1066,21 @@
       return date.toLocaleString('zh-CN', { hour12: false });
     }
 
+    function showDeviceChooser() {
+      document.getElementById('deviceChooserPanel').classList.remove('hidden');
+      document.getElementById('moduleHome').classList.add('hidden');
+      document.getElementById('smsPanel').classList.add('hidden');
+      document.getElementById('sendPanel').classList.add('hidden');
+      window.scrollTo(0, 0);
+    }
+
     function showHome() {
+      if (!selectedDeviceId) {
+        showDeviceChooser();
+        return;
+      }
+
+      document.getElementById('deviceChooserPanel').classList.add('hidden');
       document.getElementById('moduleHome').classList.remove('hidden');
       document.getElementById('smsPanel').classList.add('hidden');
       document.getElementById('sendPanel').classList.add('hidden');
@@ -976,6 +1088,12 @@
     }
 
     function showPanel(panel) {
+      if (!selectedDeviceId) {
+        showDeviceChooser();
+        return;
+      }
+
+      document.getElementById('deviceChooserPanel').classList.add('hidden');
       document.getElementById('moduleHome').classList.add('hidden');
       document.getElementById('smsPanel').classList.toggle('hidden', panel !== 'sms');
       document.getElementById('sendPanel').classList.toggle('hidden', panel !== 'send');
@@ -997,6 +1115,8 @@
     document.getElementById('loginButton').addEventListener('click', login);
     document.getElementById('loginChannel').addEventListener('change', syncLoginChannelUi);
     document.getElementById('logoutButton').addEventListener('click', logout);
+    document.getElementById('refreshDevicesButton').addEventListener('click', refreshDevices);
+    document.getElementById('changeDeviceButton').addEventListener('click', showDeviceChooser);
     document.getElementById('refreshSmsButton').addEventListener('click', refreshSmsMessages);
     document.getElementById('refreshSentSmsButton').addEventListener('click', refreshSentSmsHistory);
     document.getElementById('backFromSmsButton').addEventListener('click', showHome);

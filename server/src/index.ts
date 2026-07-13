@@ -7,7 +7,13 @@ import cors from "cors";
 import helmet from "helmet";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { config } from "./config.js";
-import { getDeviceStatus, markDeviceOffline, markDeviceOnline, markDeviceSeen } from "./deviceState.js";
+import {
+  getDeviceDisplayName,
+  listStoredDevices,
+  markStoredDeviceOffline,
+  markStoredDeviceOnline,
+  markStoredDeviceSeen
+} from "./deviceStore.js";
 import { isDeviceAllowed } from "./auth.js";
 import { forwardIncomingSmsEmail } from "./mailer.js";
 import { audit } from "./audit.js";
@@ -22,7 +28,8 @@ import {
   findDeviceSimProfile,
   getSimProfile,
   listEnabledSimProfiles,
-  resolveSmsProfile,
+  listEnabledSimProfilesByDevice,
+  resolveSmsProfileForDevice,
   syncDeviceSimProfiles,
   upsertSimProfile
 } from "./profileStore.js";
@@ -107,23 +114,46 @@ app.post("/api/telegram/webhook", (req, res) => {
 app.use("/api", requireSession);
 
 app.get("/api/device/status", (_req, res) => {
-  res.json(getDeviceStatus());
+  const devices = listStoredDevices();
+  const device = devices.find((item) => item.online) || devices[0] || null;
+  res.json(device ? {
+    online: device.online,
+    deviceId: device.deviceId,
+    displayName: device.displayName,
+    connectedAt: device.connectedAt,
+    lastSeenAt: device.lastSeenAt
+  } : {
+    online: false,
+    deviceId: null,
+    displayName: null,
+    connectedAt: null,
+    lastSeenAt: null
+  });
 });
 
-app.get("/api/sim/profiles", (_req, res) => {
-  const refreshResult = sendDeviceCommand("refresh_sim_profiles", {});
+app.get("/api/devices", (_req, res) => {
+  res.json({ devices: listStoredDevices() });
+});
+
+app.get("/api/sim/profiles", (req, res) => {
+  const deviceId = normalizeRequestText(req.query.deviceId);
+  const refreshResult = deviceId
+    ? sendDeviceCommand("refresh_sim_profiles", {}, deviceId)
+    : sendDeviceCommand("refresh_sim_profiles", {});
   if (!refreshResult.ok) {
-    console.warn("[sim] refresh_sim_profiles not sent", { reason: refreshResult.error });
+    console.warn("[sim] refresh_sim_profiles not sent", { deviceId, reason: refreshResult.error });
   }
 
-  const profiles = listEnabledSimProfiles();
+  const profiles = deviceId ? listEnabledSimProfilesByDevice(deviceId) : listEnabledSimProfiles();
   console.log("[sim] profiles requested", {
     count: profiles.length,
+    deviceId,
     deviceRefreshSent: refreshResult.ok
   });
 
   res.json({
     defaultProfile: null,
+    deviceId,
     profiles
   });
 });
@@ -147,30 +177,36 @@ app.post("/api/sim/profiles", (req, res) => {
 });
 
 app.get("/api/sms", (req, res) => {
-  const messages = listSmsMessages(parseSmsLimit(req.query.limit));
+  const deviceId = normalizeRequestText(req.query.deviceId);
+  const messages = listSmsMessages(parseSmsLimit(req.query.limit), deviceId);
   res.json({
     count: messages.length,
-    unreadCount: getUnreadSmsCount(),
+    unreadCount: getUnreadSmsCount(deviceId),
+    deviceId,
     messages
   });
 });
 
 app.get("/api/sms/sent", (req, res) => {
-  const messages = listSmsSendLogs(parseSmsSendLogLimit(req.query.limit));
+  const deviceId = normalizeRequestText(req.query.deviceId);
+  const messages = listSmsSendLogs(parseSmsSendLogLimit(req.query.limit), deviceId);
   res.json({
     count: messages.length,
+    deviceId,
     messages
   });
 });
 
-app.post("/api/sms/mark-read", (_req, res) => {
+app.post("/api/sms/mark-read", (req, res) => {
   const session = getResponseSession(res);
-  const changed = markAllSmsRead();
-  audit("sms_mark_read", { email: session.email, count: changed });
+  const deviceId = normalizeRequestText(req.body?.deviceId || req.query.deviceId);
+  const changed = markAllSmsRead(deviceId);
+  audit("sms_mark_read", { email: session.email, deviceId, count: changed });
   res.json({
     ok: true,
     changed,
-    unreadCount: getUnreadSmsCount()
+    deviceId,
+    unreadCount: getUnreadSmsCount(deviceId)
   });
 });
 
@@ -182,11 +218,13 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
   const session = getResponseSession(res);
   const to = String(req.body?.to || "").trim();
   const text = String(req.body?.text || "").trim();
+  const deviceId = normalizeRequestText(req.body?.deviceId);
   const profileId = String(req.body?.profileId || "").trim();
 
   console.log("[sms] send request received", {
     source: "web",
     actor: session.email,
+    deviceId,
     to,
     profileId,
     textLength: text.length
@@ -194,6 +232,11 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
 
   if (!to || !text) {
     res.status(400).json({ error: "to_and_text_required" });
+    return;
+  }
+
+  if (!deviceId) {
+    res.status(400).json({ error: "device_required" });
     return;
   }
 
@@ -206,6 +249,7 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
     actorKey: `web:${session.email}`,
     actorLabel: session.email,
     source: "web",
+    deviceId,
     to,
     text,
     profileId
@@ -215,6 +259,7 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
     console.warn("[sms] send request failed", {
       source: "web",
       actor: session.email,
+      deviceId,
       to,
       profileId,
       error: result.error
@@ -229,6 +274,7 @@ async function handleWebSmsSend(req: Request, res: Response): Promise<void> {
   res.json({
     ok: true,
     deviceId: result.deviceId,
+    deviceName: getDeviceDisplayName(result.deviceId),
     profileId: result.profileId,
     note: result.note,
     status: "submitted"
@@ -267,9 +313,11 @@ server.on("upgrade", (req, socket, head) => {
 
   const deviceId = req.headers["x-device-id"];
   const deviceKey = req.headers["x-device-key"];
+  const deviceModel = req.headers["x-device-model"];
 
   const normalizedDeviceId = Array.isArray(deviceId) ? deviceId[0] : deviceId;
   const normalizedDeviceKey = Array.isArray(deviceKey) ? deviceKey[0] : deviceKey;
+  const normalizedDeviceModel = Array.isArray(deviceModel) ? deviceModel[0] : deviceModel;
 
   if (!isDeviceAllowed(normalizedDeviceId, normalizedDeviceKey)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -278,7 +326,7 @@ server.on("upgrade", (req, socket, head) => {
   }
 
   deviceWss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
-    deviceWss.emit("connection", ws, req, normalizedDeviceId);
+    deviceWss.emit("connection", ws, req, normalizedDeviceId, normalizedDeviceModel);
   });
 });
 
@@ -304,13 +352,14 @@ browserWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, email: s
   }));
 });
 
-deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: string) => {
-  markDeviceOnline(deviceId);
+deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId: string, deviceModel?: string) => {
+  const device = markStoredDeviceOnline(deviceId, deviceModel);
   activeDeviceSockets.set(deviceId, ws);
-  console.log(`[device] online: ${deviceId}`);
+  console.log(`[device] online: ${device.displayName} (${deviceId})`);
+  broadcastBrowserEvent("devices_updated", { devices: listStoredDevices() });
 
   ws.on("message", (raw: RawData) => {
-    markDeviceSeen();
+    markStoredDeviceSeen(deviceId);
 
     const text = raw.toString();
     console.log(`[device] message: ${text}`);
@@ -319,6 +368,12 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       const json = JSON.parse(text);
       const type = json.type;
       const payload = json.payload || {};
+
+      if (type === "device_online") {
+        const updatedDevice = markStoredDeviceOnline(deviceId, payload.deviceModel || payload.model || deviceModel);
+        audit("device_online", { deviceId, displayName: updatedDevice.displayName });
+        broadcastBrowserEvent("devices_updated", { devices: listStoredDevices() });
+      }
 
       if (type === "sim_profiles") {
         const profiles = syncDeviceSimProfiles(deviceId, payload.profiles);
@@ -329,7 +384,8 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
         });
 
         broadcastBrowserEvent("sim_profiles_updated", {
-          profiles: listEnabledSimProfiles()
+          deviceId,
+          profiles: listEnabledSimProfilesByDevice(deviceId)
         });
       }
 
@@ -443,7 +499,7 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
       if (type === "incoming_sms") {
         const smsPayload = enrichSmsPayloadWithSimProfile(deviceId, payload);
         const savedSms = saveIncomingSms(deviceId, smsPayload);
-        const unreadCount = getUnreadSmsCount();
+        const unreadCount = getUnreadSmsCount(deviceId);
 
         console.log("========== INCOMING SMS ==========");
         console.log(`Saved ID: ${savedSms.id}`);
@@ -490,8 +546,9 @@ deviceWss.on("connection", (ws: WebSocket, _req: http.IncomingMessage, deviceId:
   ws.on("close", () => {
     if (activeDeviceSockets.get(deviceId) === ws) {
       activeDeviceSockets.delete(deviceId);
-      markDeviceOffline();
+      markStoredDeviceOffline(deviceId);
       console.log(`[device] offline: ${deviceId}`);
+      broadcastBrowserEvent("devices_updated", { devices: listStoredDevices() });
       return;
     }
     console.log(`[device] stale socket closed: ${deviceId}`);
@@ -521,6 +578,7 @@ type SubmitSmsSendInput = {
   actorKey: string;
   actorLabel: string;
   source: SmsSendSource;
+  deviceId: string;
   to: string;
   text: string;
   profileId: string;
@@ -546,7 +604,16 @@ type PendingSmsSendAck = {
   resolve: (ack: SmsSendAck) => void;
 };
 
+type TelegramDeviceOption = {
+  deviceId: string;
+  displayName: string;
+  online: boolean;
+  lastSeenAt: string | null;
+};
+
 type TelegramProfileOption = {
+  deviceId: string;
+  deviceName: string;
   profileId: string;
   displayName: string;
   carrierName: string | null;
@@ -556,18 +623,21 @@ type TelegramProfileOption = {
 };
 
 type PendingTelegramSmsSelection = {
+  stage: "device" | "profile";
   to: string;
   text: string;
   createdAt: number;
-  profiles: TelegramProfileOption[];
+  devices?: TelegramDeviceOption[];
+  device?: TelegramDeviceOption;
+  profiles?: TelegramProfileOption[];
 };
 
 async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendResult> {
-  let profile: ReturnType<typeof resolveSmsProfile>;
+  let profile: ReturnType<typeof resolveSmsProfileForDevice>;
   let profileDetails: SimProfile | null = null;
 
   try {
-    profile = resolveSmsProfile(input.profileId);
+    profile = resolveSmsProfileForDevice(input.deviceId, input.profileId);
     profileDetails = getSimProfile(profile.profileId);
   } catch (error) {
     const message = getErrorMessage(error);
@@ -623,7 +693,7 @@ async function submitSmsSend(input: SubmitSmsSendInput): Promise<SubmitSmsSendRe
   };
 
   const ackPromise = waitForSmsSendAck(commandId);
-  const result = sendDeviceCommand("send_sms", commandPayload);
+  const result = sendDeviceCommand("send_sms", commandPayload, input.deviceId);
 
   if (!result.ok) {
     cancelSmsSendAck(commandId);
@@ -716,7 +786,7 @@ function recordSmsSendHistory(
       profileDisplayName: profile?.displayName ?? null,
       profilePhoneNumber: profile?.phoneNumber ?? null,
       carrierName: profile?.carrierName ?? null,
-      deviceId: details.deviceId ?? null,
+      deviceId: details.deviceId ?? input.deviceId,
       subscriptionId: details.subscriptionId ?? profile?.subscriptionId ?? null,
       slotIndex: details.slotIndex ?? profile?.slotIndex ?? null,
       status: details.status,
@@ -797,7 +867,9 @@ async function processTelegramMessage(message: TelegramMessageLike | undefined, 
   const chatId = message?.chat?.id === undefined ? "" : String(message.chat.id);
   const text = typeof message?.text === "string" ? message.text.trim() : "";
   const normalizedText = text.toLowerCase();
-  const isKnownCommand = normalizedText.startsWith("/send") || normalizedText.startsWith("/profiles");
+  const isKnownCommand = normalizedText.startsWith("/send")
+    || normalizedText.startsWith("/profiles")
+    || normalizedText.startsWith("/devices");
 
   if (isKnownCommand || isPendingTelegramSelection(chatId, text)) {
     console.log("[telegram] command received", {
@@ -818,7 +890,13 @@ async function processTelegramMessage(message: TelegramMessageLike | undefined, 
   }
 
   if (isPendingTelegramSelection(chatId, text)) {
-    await handleTelegramProfileChoice(chatId, text);
+    await handleTelegramSelection(chatId, text);
+    return;
+  }
+
+  if (normalizedText.startsWith("/devices")) {
+    const devices = buildTelegramDeviceOptions();
+    await sendTelegramReply(devices.length > 0 ? formatTelegramDevicesList(devices) : formatNoTelegramDevices());
     return;
   }
 
@@ -835,26 +913,32 @@ async function processTelegramMessage(message: TelegramMessageLike | undefined, 
     return;
   }
 
-  if (!parsed.profileId) {
-    const profiles = buildTelegramProfileOptions();
-    if (profiles.length === 0) {
-      await sendTelegramReply(formatNoTelegramProfiles());
+  if (parsed.profileId) {
+    const profileDetails = getSimProfile(parsed.profileId);
+    if (!profileDetails?.deviceId) {
+      await sendTelegramReply("Send failed: profile not found. Use /profiles to view available profiles.");
       return;
     }
 
-    pendingTelegramSmsSelections.set(chatId, {
-      to: parsed.to,
-      text: parsed.text,
-      createdAt: Date.now(),
-      profiles
-    });
-    await sendTelegramReply(formatTelegramProfileSelectionPrompt(profiles));
+    await submitTelegramSms(chatId, parsed.to, parsed.text, profileDetails.deviceId, parsed.profileId, false);
     return;
   }
 
-  await submitTelegramSms(chatId, parsed.to, parsed.text, parsed.profileId, buildTelegramProfileOptions().length === 1);
-}
+  const devices = buildTelegramDeviceOptions();
+  if (devices.length === 0) {
+    await sendTelegramReply(formatNoTelegramDevices());
+    return;
+  }
 
+  pendingTelegramSmsSelections.set(chatId, {
+    stage: "device",
+    to: parsed.to,
+    text: parsed.text,
+    createdAt: Date.now(),
+    devices
+  });
+  await sendTelegramReply(formatTelegramDeviceSelectionPrompt(devices));
+}
 function startTelegramPolling(): void {
   if (telegramPollingStarted || !config.telegram.botToken || !config.telegram.chatId) {
     return;
@@ -990,7 +1074,7 @@ function formatTelegramSmsSendError(result: Exclude<SubmitSmsSendResult, { ok: t
   return `Send failed: ${result.error}`;
 }
 
-async function handleTelegramProfileChoice(chatId: string, text: string): Promise<void> {
+async function handleTelegramSelection(chatId: string, text: string): Promise<void> {
   const pending = pendingTelegramSmsSelections.get(chatId);
   if (!pending) {
     return;
@@ -1003,27 +1087,58 @@ async function handleTelegramProfileChoice(chatId: string, text: string): Promis
   }
 
   const selection = Number(text);
-  if (!Number.isInteger(selection) || selection < 1 || selection > pending.profiles.length) {
-    await sendTelegramReply(formatTelegramProfileSelectionPrompt(pending.profiles));
+
+  if (pending.stage === "device") {
+    const devices = pending.devices || [];
+    if (!Number.isInteger(selection) || selection < 1 || selection > devices.length) {
+      await sendTelegramReply(formatTelegramDeviceSelectionPrompt(devices));
+      return;
+    }
+
+    const device = devices[selection - 1];
+    const profiles = buildTelegramProfileOptions(device.deviceId);
+    if (profiles.length === 0) {
+      pendingTelegramSmsSelections.delete(chatId);
+      await sendTelegramReply(formatNoTelegramProfiles(device));
+      return;
+    }
+
+    pendingTelegramSmsSelections.set(chatId, {
+      stage: "profile",
+      to: pending.to,
+      text: pending.text,
+      createdAt: Date.now(),
+      device,
+      profiles
+    });
+    await sendTelegramReply(formatTelegramProfileSelectionPrompt(profiles, device));
     return;
   }
 
-  const profile = pending.profiles[selection - 1];
+  const profiles = pending.profiles || [];
+  if (!Number.isInteger(selection) || selection < 1 || selection > profiles.length) {
+    await sendTelegramReply(formatTelegramProfileSelectionPrompt(profiles, pending.device));
+    return;
+  }
+
+  const profile = profiles[selection - 1];
   pendingTelegramSmsSelections.delete(chatId);
-  await submitTelegramSms(chatId, pending.to, pending.text, profile.profileId, pending.profiles.length === 1);
+  await submitTelegramSms(chatId, pending.to, pending.text, profile.deviceId, profile.profileId, profiles.length === 1);
 }
 
 async function submitTelegramSms(
   chatId: string,
   to: string,
   text: string,
+  deviceId: string,
   profileId: string,
   defaultOnly: boolean
 ): Promise<void> {
   const result = await submitSmsSend({
-    actorKey: `telegram:${chatId}`,
+    actorKey: `telegram:${chatId}:${deviceId}`,
     actorLabel: "Telegram",
     source: "telegram",
+    deviceId,
     to,
     text,
     profileId
@@ -1036,11 +1151,12 @@ async function submitTelegramSms(
 
   const lines = [
     "SMS command submitted.",
+    `Device: ${getDeviceDisplayName(result.deviceId)}`,
     `Profile: ${result.profileId}`
   ];
 
   if (defaultOnly) {
-    lines.push("Note: only one SIM/Profile is currently available.");
+    lines.push("Note: only one SIM/Profile is currently available on this device.");
   }
 
   await sendTelegramReply(lines.join("\n"));
@@ -1050,13 +1166,24 @@ function isPendingTelegramSelection(chatId: string, text: string): boolean {
   return chatId === config.telegram.chatId && /^\d+$/.test(text) && pendingTelegramSmsSelections.has(chatId);
 }
 
-function buildTelegramProfileOptions(): TelegramProfileOption[] {
-  const profiles = listEnabledSimProfiles();
+function buildTelegramDeviceOptions(): TelegramDeviceOption[] {
+  return listStoredDevices().map((device) => ({
+    deviceId: device.deviceId,
+    displayName: device.displayName,
+    online: device.online,
+    lastSeenAt: device.lastSeenAt
+  }));
+}
+
+function buildTelegramProfileOptions(deviceId?: string | null): TelegramProfileOption[] {
+  const profiles = deviceId ? listEnabledSimProfilesByDevice(deviceId) : listEnabledSimProfiles();
   return profiles.map(mapTelegramProfileOption);
 }
 
 function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
   return {
+    deviceId: profile.deviceId || "",
+    deviceName: getDeviceDisplayName(profile.deviceId),
     profileId: profile.profileId,
     displayName: profile.displayName,
     carrierName: profile.carrierName,
@@ -1066,9 +1193,21 @@ function mapTelegramProfileOption(profile: SimProfile): TelegramProfileOption {
   };
 }
 
-function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[]): string {
+function formatTelegramDeviceSelectionPrompt(devices: TelegramDeviceOption[]): string {
+  const lines = [
+    "Choose sending Device:",
+    ...devices.map((device, index) => `${index + 1}. ${formatTelegramDeviceLabel(device)}`),
+    "",
+    "Reply with the number to continue."
+  ];
+
+  return lines.join("\n");
+}
+
+function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[], device?: TelegramDeviceOption): string {
   const lines = [
     "Choose sending SIM/Profile:",
+    ...(device ? [`Device: ${device.displayName}`, ""] : []),
     ...profiles.map((profile, index) => `${index + 1}. ${formatTelegramProfileLabel(profile)}`),
     "",
     "Reply with the number to send."
@@ -1077,12 +1216,26 @@ function formatTelegramProfileSelectionPrompt(profiles: TelegramProfileOption[])
   return lines.join("\n");
 }
 
+function formatTelegramDevicesList(devices: TelegramDeviceOption[]): string {
+  return [
+    "Available Devices:",
+    "",
+    ...devices.flatMap((device, index) => [
+      `${index + 1}. ${device.displayName}`,
+      `   deviceId: ${device.deviceId}`,
+      `   online: ${device.online}`,
+      `   lastSeenAt: ${device.lastSeenAt || "-"}`
+    ])
+  ].join("\n");
+}
+
 function formatTelegramProfilesList(profiles: TelegramProfileOption[]): string {
   return [
     "Available Profiles:",
     "",
     ...profiles.flatMap((profile, index) => [
       `${index + 1}. ${profile.profileId} - ${formatTelegramProfileLabel(profile)}`,
+      `   device: ${profile.deviceName}`,
       `   carrierName: ${profile.carrierName || "-"}`,
       `   phoneNumber: ${profile.phoneNumber || "-"}`,
       `   isEnabled: ${profile.isEnabled}`,
@@ -1097,15 +1250,28 @@ function formatTelegramSmsUsageError(): string {
     "Use:",
     "/send sms / +13022985056 / message",
     "or:",
-    "/send --profile <profileId> +13022985056 message"
+    "/send --profile <profileId> +13022985056 message",
+    "",
+    "Without --profile, the bot will ask you to choose Device, then SIM/Profile."
   ].join("\n");
 }
 
-function formatNoTelegramProfiles(): string {
+function formatNoTelegramDevices(): string {
   return [
-    "No SIM/Profile is available.",
+    "No Android Gateway device is available.",
+    "Please open the Android app, keep it online, then send /devices again."
+  ].join("\n");
+}
+
+function formatNoTelegramProfiles(device?: TelegramDeviceOption): string {
+  return [
+    `No SIM/Profile is available${device ? ` on ${device.displayName}` : ""}.`,
     "Please open the Android app, grant Phone/SMS permissions, keep it online, then send /profiles again."
   ].join("\n");
+}
+
+function formatTelegramDeviceLabel(device: TelegramDeviceOption): string {
+  return `${device.displayName} - ${device.online ? "Online" : "Offline"}`;
 }
 
 function formatTelegramProfileLabel(profile: TelegramProfileOption): string {
@@ -1115,7 +1281,6 @@ function formatTelegramProfileLabel(profile: TelegramProfileOption): string {
     profile.carrierName || ""
   ].filter(Boolean).join(" - ");
 }
-
 function broadcastBrowserEvent(type: string, payload: Record<string, unknown>): void {
   const body = JSON.stringify({
     type,
@@ -1153,6 +1318,7 @@ function enrichSmsPayloadWithSimProfile(
 
   return {
     ...payload,
+    profileId: firstText(payload.profileId, profile.profileId),
     subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
     slotIndex: payload.slotIndex ?? profile.slotIndex,
     carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
@@ -1248,13 +1414,14 @@ function firstText(...values: unknown[]): string | null {
 
 function sendDeviceCommand(
   type: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  targetDeviceId?: string | null
 ): { ok: true; deviceId: string } | { ok: false; status: number; error: string } {
-  const deviceStatus = getDeviceStatus();
-  let deviceId = deviceStatus.deviceId;
+  const normalizedTargetDeviceId = normalizeRequestText(targetDeviceId);
+  let deviceId = normalizedTargetDeviceId;
   let ws = deviceId ? activeDeviceSockets.get(deviceId) : undefined;
 
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+  if (!deviceId) {
     const fallback = Array.from(activeDeviceSockets.entries())
       .find(([, socket]) => socket.readyState === WebSocket.OPEN);
 
@@ -1266,8 +1433,7 @@ function sendDeviceCommand(
   if (!deviceId || !ws || ws.readyState !== WebSocket.OPEN) {
     if (type === "send_sms") {
       console.warn("[sms] no online Android Gateway", {
-        statusOnline: deviceStatus.online,
-        statusDeviceId: deviceStatus.deviceId,
+        targetDeviceId: normalizedTargetDeviceId,
         activeDeviceSocketCount: activeDeviceSockets.size
       });
     }
@@ -1302,4 +1468,13 @@ function sendDeviceCommand(
   }
 
   return { ok: true, deviceId };
+}
+
+function normalizeRequestText(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
 }
