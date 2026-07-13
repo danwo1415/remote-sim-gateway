@@ -164,3 +164,24 @@ Web UI should list Profiles:
 ```
 
 Do not display fixed `SIM1` or `SIM2` labels as the core model.
+
+## Manual Phone Number Override
+
+Some Android builds or carriers do not expose the SIM line number through `SubscriptionInfo.number` or `TelephonyManager.line1Number`.
+
+When the Android Gateway can identify the incoming SMS `subscriptionId` or `slotIndex` but cannot read the actual SIM phone number, Server can fill the display `To` value from `/opt/remote-sim-gateway/.env`:
+
+```bash
+SIM_PHONE_NUMBERS="subscription:6=+8613800000000;slot:1=+33700000000;profile:device-id:subscription:36=+33700000000"
+pm2 restart remote-sim-gateway
+```
+
+Supported keys:
+
+```text
+subscription:<subscriptionId>
+slot:<slotIndex>
+profile:<profileId>
+```
+
+This is a runtime configuration override. Do not commit real SIM phone numbers to GitHub.

@@ -62,6 +62,24 @@ object SimProfileReporter {
             ?.subscriptionId
     }
 
+    fun singleActiveSubscriptionId(context: Context): Int? {
+        if (!hasPhoneStatePermission(context)) {
+            return null
+        }
+
+        val subscriptions = activeSubscriptions(context)
+        return if (subscriptions.size == 1) subscriptions.first().subscriptionId else null
+    }
+
+    fun slotIndexForSubscription(context: Context, subscriptionId: Int?): Int? {
+        if (subscriptionId == null || !hasPhoneStatePermission(context)) {
+            return null
+        }
+
+        return activeSubscriptions(context)
+            .firstOrNull { it.subscriptionId == subscriptionId }
+            ?.simSlotIndex
+    }
     fun isActiveSubscription(context: Context, subscriptionId: Int): Boolean {
         if (!hasPhoneStatePermission(context)) {
             return false

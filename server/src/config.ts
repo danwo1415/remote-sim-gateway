@@ -16,6 +16,7 @@ export const config = {
   maxLoginAttempts: readNumber("MAX_LOGIN_ATTEMPTS", 5),
   smsSendIntervalMs: readNumber("SMS_SEND_INTERVAL", 60) * 1000,
   sqlitePath: process.env.SQLITE_PATH || path.resolve(process.cwd(), "data", "remote-sim-gateway.sqlite"),
+  simPhoneNumberOverrides: readKeyValueMap("SIM_PHONE_NUMBERS") || readKeyValueMap("SIM_PHONE_NUMBER_OVERRIDES"),
   auditLogPath: process.env.AUDIT_LOG_PATH || path.resolve(process.cwd(), "logs", "audit.log"),
   smtp: {
     host: process.env.SMTP_HOST?.trim() || "",
@@ -36,6 +37,32 @@ export const config = {
   },
   cookieSecure: readBoolean("SESSION_COOKIE_SECURE") ?? false
 };
+
+function readKeyValueMap(name: string): Record<string, string> | null {
+  const raw = process.env[name];
+  if (!raw || raw.trim().length === 0) {
+    return null;
+  }
+
+  const values: Record<string, string> = {};
+  for (const entry of raw.split(/[;,\n]+/)) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+
+    const key = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim();
+    if (!key || !value) {
+      continue;
+    }
+
+    values[key] = value;
+    values[key.toLowerCase()] = value;
+  }
+
+  return Object.keys(values).length > 0 ? values : null;
+}
 
 function readNumber(name: string, fallback: number): number {
   const value = Number(process.env[name]);

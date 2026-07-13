@@ -1142,8 +1142,13 @@ function enrichSmsPayloadWithSimProfile(
   payload: Record<string, unknown>
 ): Record<string, unknown> {
   const profile = findDeviceSimProfile(deviceId, payload);
+  const phoneNumberOverride = findSimPhoneNumberOverride(profile, payload);
+
   if (!profile) {
-    return payload;
+    return {
+      ...payload,
+      to: firstText(payload.to, payload.toNumber, payload.simNumber, phoneNumberOverride)
+    };
   }
 
   return {
@@ -1151,7 +1156,7 @@ function enrichSmsPayloadWithSimProfile(
     subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
     slotIndex: payload.slotIndex ?? profile.slotIndex,
     carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
-    to: firstText(payload.to, payload.toNumber, payload.simNumber, profile.phoneNumber)
+    to: firstText(payload.to, payload.toNumber, payload.simNumber, phoneNumberOverride, profile.phoneNumber)
   };
 }
 
@@ -1169,7 +1174,7 @@ function enrichCallPayloadWithSimProfile(
     subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
     slotIndex: payload.slotIndex ?? profile.slotIndex,
     carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
-    simNumber: firstText(payload.simNumber, profile.phoneNumber)
+    simNumber: firstText(payload.simNumber, findSimPhoneNumberOverride(profile, payload), profile.phoneNumber)
   };
 
   if (enriched.simNumber) {
@@ -1190,6 +1195,35 @@ function enrichCallPayloadWithSimProfile(
   return enriched;
 }
 
+function findSimPhoneNumberOverride(profile: SimProfile | null, payload: Record<string, unknown>): string | null {
+  const overrides = config.simPhoneNumberOverrides;
+  if (!overrides) {
+    return null;
+  }
+
+  const keys = [
+    firstText(profile?.profileId) ? `profile:${profile?.profileId}` : null,
+    firstText(payload.profileId) ? `profile:${firstText(payload.profileId)}` : null,
+    firstText(payload.subscriptionId, profile?.subscriptionId) ? `subscription:${firstText(payload.subscriptionId, profile?.subscriptionId)}` : null,
+    firstText(payload.slotIndex, profile?.slotIndex) ? `slot:${firstText(payload.slotIndex, profile?.slotIndex)}` : null,
+    firstText(profile?.profileId),
+    firstText(payload.subscriptionId, profile?.subscriptionId),
+    firstText(payload.slotIndex, profile?.slotIndex)
+  ];
+
+  for (const key of keys) {
+    if (!key) {
+      continue;
+    }
+
+    const value = overrides[key] || overrides[key.toLowerCase()];
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
 function firstText(...values: unknown[]): string | null {
   for (const value of values) {
     if (value === undefined || value === null) {

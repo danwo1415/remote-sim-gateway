@@ -31,9 +31,10 @@ MAX_LOGIN_ATTEMPTS="5"
 SMS_SEND_INTERVAL="60"
 PORT="3000"
 SQLITE_PATH="/opt/remote-sim-gateway/remote-sim-gateway.sqlite"
+SIM_PHONE_NUMBERS="subscription:6=+8613800000000;slot:1=+33700000000"
 ```
 
-To change email, Telegram, SMTP, Session, SMS rate limit, port, or SQLite:
+To change email, Telegram, SMTP, Session, SMS rate limit, port, SQLite, or SIM phone-number overrides:
 
 ```bash
 cd /opt/remote-sim-gateway
