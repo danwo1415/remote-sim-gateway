@@ -21,11 +21,41 @@ class CallStateReceiver : BroadcastReceiver() {
             intent,
             SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX,
             "subscription",
-            "android.telephony.extra.SUBSCRIPTION_INDEX"
+            "subscriptionId",
+            "subscription_id",
+            "subId",
+            "sub_id",
+            "simSubscriptionId",
+            "android.telephony.extra.SUBSCRIPTION_INDEX",
+            "android.telephony.extra.SUBSCRIPTION_ID"
         )
-        val slotIndex = readOptionalIntExtra(intent, "slot", "slotIndex", "simSlotIndex")
+        val slotIndex = readOptionalIntExtra(
+            intent,
+            "slot",
+            "slotIndex",
+            "slotIdx",
+            "slot_index",
+            "simSlotIndex",
+            "sim_slot_index",
+            "phone",
+            "phoneId",
+            "phone_id",
+            "simId",
+            "simSlot",
+            "slotId",
+            "android.telephony.extra.SLOT_INDEX",
+            "android.telephony.extra.PHONE_ID"
+        )
+        val effectiveSlotIndex = slotIndex
+            ?: subscriptionId?.let { SimProfileReporter.slotIndexForSubscription(context, it) }
         val effectiveSubscriptionId = subscriptionId
-            ?: slotIndex?.let { SimProfileReporter.findSubscriptionIdBySlotIndex(context, it) }
+            ?: effectiveSlotIndex?.let { SimProfileReporter.findSubscriptionIdBySlotIndex(context, it) }
+            ?: SimProfileReporter.singleActiveSubscriptionId(context)
+
+        Log.i(
+            "CallState",
+            "State $state number=$number subscriptionId=$effectiveSubscriptionId slotIndex=$effectiveSlotIndex extras=${describeExtras(intent)}"
+        )
 
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
@@ -34,7 +64,7 @@ class CallStateReceiver : BroadcastReceiver() {
                 activeStartedAtMillis = System.currentTimeMillis()
                 activeAnsweredAtMillis = null
                 activeSubscriptionId = effectiveSubscriptionId
-                activeSlotIndex = slotIndex
+                activeSlotIndex = effectiveSlotIndex
 
                 val payload = JSONObject()
                     .put("number", number)
@@ -52,8 +82,8 @@ class CallStateReceiver : BroadcastReceiver() {
                     }
                 }
 
-                if (slotIndex != null) {
-                    payload.put("slotIndex", slotIndex)
+                if (effectiveSlotIndex != null) {
+                    payload.put("slotIndex", effectiveSlotIndex)
                 }
 
                 GatewayEventBus.sendCallEvent(context, "incoming_call", payload)
@@ -130,6 +160,21 @@ class CallStateReceiver : BroadcastReceiver() {
         }
 
         return null
+    }
+
+    private fun describeExtras(intent: Intent): String {
+        val extras = intent.extras ?: return "{}"
+        return extras.keySet().joinToString(prefix = "{", postfix = "}") { key ->
+            val value = extras.get(key)
+            val printable = when (value) {
+                is IntArray -> "IntArray(${value.size})"
+                is LongArray -> "LongArray(${value.size})"
+                is ByteArray -> "ByteArray(${value.size})"
+                is Array<*> -> "Array(${value.size})"
+                else -> value?.toString()?.take(80) ?: "null"
+            }
+            "$key=$printable"
+        }
     }
 
     private fun iso(value: Long?): String {

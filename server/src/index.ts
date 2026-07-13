@@ -1165,8 +1165,14 @@ function enrichCallPayloadWithSimProfile(
   payload: Record<string, unknown>
 ): Record<string, unknown> {
   const profile = findDeviceSimProfile(deviceId, payload);
+  const phoneNumberOverride = findSimPhoneNumberOverride(profile, payload);
+
   if (!profile) {
-    return payload;
+    return {
+      ...payload,
+      simNumber: firstText(payload.simNumber, phoneNumberOverride),
+      to: firstText(payload.to, payload.toNumber, payload.simNumber, phoneNumberOverride)
+    };
   }
 
   const enriched = {
@@ -1174,7 +1180,8 @@ function enrichCallPayloadWithSimProfile(
     subscriptionId: firstText(payload.subscriptionId, profile.subscriptionId),
     slotIndex: payload.slotIndex ?? profile.slotIndex,
     carrierName: firstText(payload.carrierName, profile.carrierName, profile.displayName),
-    simNumber: firstText(payload.simNumber, findSimPhoneNumberOverride(profile, payload), profile.phoneNumber)
+    simNumber: firstText(payload.simNumber, phoneNumberOverride, profile.phoneNumber),
+    to: firstText(payload.to, payload.toNumber, payload.simNumber, phoneNumberOverride, profile.phoneNumber)
   };
 
   if (enriched.simNumber) {
